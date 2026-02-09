@@ -1,6 +1,6 @@
 # NEON-RIG // ACID RETARGETER
 
-> **v1.1 // STABLE**  
+> **v1.2 // STABLE**  
 > _High-performance, browser-based 3D animation retargeting tool with a cyberpunk/acid aesthetic._
 
 ![License](https://img.shields.io/badge/license-MIT-39ff14?style=flat-square)
@@ -29,7 +29,7 @@ Ignite the development server:
 pnpm run dev
 ```
 
-Open `http://localhost:5173` (or the port shown in your terminal) to access the rig.
+Open `http://localhost:3000` (or the port shown in your terminal) to access the rig.
 
 ---
 
@@ -56,7 +56,13 @@ Open `http://localhost:5173` (or the port shown in your terminal) to access the 
 - Drag the neon green spheres to match the character's joints (Chin, Knees, Elbows, etc.).
 - Click `GENERATE SKELETON` to bind the mesh.
 
-### 4. Retargeting (Modes)
+### 4. Bone Mapping Presets
+
+- Use the **PRESETS** dropdown to load pre-configured bone mappings (Mixamo, VRM, etc.).
+- Click **SAVE** to save your current bone mapping as a custom preset.
+- Custom presets are stored in browser localStorage.
+
+### 5. Retargeting (Modes)
 
 Go to the **RETARGET** tab to choose your solver:
 
@@ -69,6 +75,18 @@ Go to the **RETARGET** tab to choose your solver:
   - **Features:** Two-Bone IK Solver (CCD), Root Scaling.
   - **Correction:** Prevents foot sliding by scaling root motion and locking feet to the floor based on source animation.
   - **Usage:** Recommended for characters with different sizes (e.g., Adult to Child, or Monster to Human).
+
+### 6. Export
+
+- After baking your animation, click **EXPORT GLB** to download the retargeted model with animation.
+- The exported file includes the mesh and all animation tracks.
+
+### 7. Timeline Controls
+
+- **Scrub:** Click and drag on the timeline to seek to any point.
+- **Speed:** Use the speed control (gauge icon) to adjust playback speed (0.25x to 2x).
+- **Loop:** Toggle looping with the repeat button.
+- **Skip:** Use skip forward/backward buttons to jump 1 second at a time.
 
 ---
 
@@ -83,10 +101,12 @@ Go to the **RETARGET** tab to choose your solver:
 ## 🚀 UPGRADE_PATH (Roadmap)
 
 - [x] **V2 Solver (Full IK):** Basic CCD IK implemented for leg chains.
+- [x] **GLB Export:** Export retargeted animations as `.glb` files.
+- [x] **Save/Load Presets:** Save and load bone mapping presets (Mixamo, VRM, custom).
+- [x] **Timeline Scrubbing:** Functional timeline with click-to-seek and drag scrubbing.
+- [x] **Playback Speed:** Adjustable playback speed (0.25x to 2x).
 - [ ] **Twist Bones:** Support for forearm/thigh twist bone mapping.
 - [ ] **Timeline Editor:** Keyframe editing and curve manipulation within the UI.
-- [ ] **Export:** Ability to export the retargeted result as a `.glb` file.
-- [ ] **Save/Load Map:** Save bone mapping presets (e.g., Mixamo to VRM preset).
 
 ---
 

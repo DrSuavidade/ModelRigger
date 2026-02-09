@@ -1,43 +1,46 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>NEON-RIG // RETARGETER</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;700&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;700&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap"
+      rel="stylesheet"
+    />
     <script>
       tailwind.config = {
         theme: {
           extend: {
             colors: {
               acid: {
-                black: '#07070A',
-                green: '#39ff14',
-                magenta: '#ff00ff',
-                cyan: '#00ffff',
-                orange: '#ff5f00',
-                violet: '#bf00ff',
-                dark: '#111116'
-              }
+                black: "#07070A",
+                green: "#39ff14",
+                magenta: "#ff00ff",
+                cyan: "#00ffff",
+                orange: "#ff5f00",
+                violet: "#bf00ff",
+                dark: "#111116",
+              },
             },
             fontFamily: {
-              display: ['Oswald', 'sans-serif'],
-              mono: ['Space Mono', 'monospace'],
+              display: ["Oswald", "sans-serif"],
+              mono: ["Space Mono", "monospace"],
             },
             boxShadow: {
-              'neon-green': '0 0 5px #39ff14, 0 0 10px #39ff14',
-              'neon-magenta': '0 0 5px #ff00ff, 0 0 10px #ff00ff',
-            }
-          }
-        }
-      }
+              "neon-green": "0 0 5px #39ff14, 0 0 10px #39ff14",
+              "neon-magenta": "0 0 5px #ff00ff, 0 0 10px #ff00ff",
+            },
+          },
+        },
+      };
     </script>
     <style>
       body {
-        background-color: #07070A;
+        background-color: #07070a;
         color: #e0e0e0;
         overflow: hidden;
       }
@@ -47,7 +50,7 @@
         height: 8px;
       }
       ::-webkit-scrollbar-track {
-        background: #07070A;
+        background: #07070a;
       }
       ::-webkit-scrollbar-thumb {
         background: #333;
@@ -60,27 +63,11 @@
         text-shadow: 0 0 2px currentColor;
       }
     </style>
-  <script type="importmap">
-{
-  "imports": {
-    "react/": "https://esm.sh/react@^19.2.4/",
-    "react": "https://esm.sh/react@^19.2.4",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.4/",
-    "lucide-react": "https://esm.sh/lucide-react@^0.563.0",
-    "three/": "https://esm.sh/three@^0.182.0/",
-    "three": "https://esm.sh/three@^0.182.0",
-    "@react-three/drei": "https://esm.sh/@react-three/drei@^10.7.7",
-    "zustand": "https://esm.sh/zustand@^5.0.11",
-    "clsx": "https://esm.sh/clsx@^2.1.1",
-    "tailwind-merge": "https://esm.sh/tailwind-merge@^3.4.0",
-    "@react-three/fiber": "https://esm.sh/@react-three/fiber@^9.5.0"
-  }
-}
-</script>
-<link rel="stylesheet" href="/index.css">
-</head>
+    <!-- Vite handles module resolution at build time, no import map needed -->
+    <link rel="stylesheet" href="/index.css" />
+  </head>
   <body>
     <div id="root"></div>
-  <script type="module" src="/index.tsx"></script>
-</body>
+    <script type="module" src="/index.tsx"></script>
+  </body>
 </html>

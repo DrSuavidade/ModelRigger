@@ -1,8 +1,23 @@
 import { create } from 'zustand';
 import { AppState, LoadedAsset, LogEntry, RetargetSettings, RiggingMarkerName } from '../types';
-import { generateUUID } from 'three/src/math/MathUtils';
+import * as THREE from 'three';
 
-export const useStore = create<AppState>((set, get) => ({
+// Loading state interface
+interface LoadingState {
+  isLoading: boolean;
+  loadingMessage: string;
+  loadingSubMessage?: string;
+  loadingProgress?: number;
+}
+
+// Extended state with loading
+interface ExtendedAppState extends AppState {
+  loading: LoadingState;
+  setLoading: (loading: Partial<LoadingState> & { isLoading: boolean }) => void;
+  clearLoading: () => void;
+}
+
+export const useStore = create<ExtendedAppState>((set, get) => ({
   assets: [],
   selectedAssetId: null,
   targetCharacterId: null,
@@ -17,7 +32,7 @@ export const useStore = create<AppState>((set, get) => ({
     fps: 30,
   },
   logs: [],
-  
+
   activeClip: null,
   isPlaying: false,
   isLooping: true,
@@ -28,7 +43,7 @@ export const useStore = create<AppState>((set, get) => ({
   showSkeleton: true,
   showWireframe: false,
   showAxes: false,
-  
+
   isRigging: false,
   riggingMirrorEnabled: true,
   riggingMarkers: {
@@ -42,8 +57,29 @@ export const useStore = create<AppState>((set, get) => ({
     r_knee: [-0.1, 0.5, 0.05]
   },
 
+  // Loading state
+  loading: {
+    isLoading: false,
+    loadingMessage: '',
+    loadingSubMessage: undefined,
+    loadingProgress: undefined,
+  },
+
+  setLoading: (loading) => set((state) => ({
+    loading: { ...state.loading, ...loading }
+  })),
+
+  clearLoading: () => set({
+    loading: {
+      isLoading: false,
+      loadingMessage: '',
+      loadingSubMessage: undefined,
+      loadingProgress: undefined,
+    }
+  }),
+
   addLog: (level, message, context) => set((state) => ({
-    logs: [...state.logs, { id: generateUUID(), timestamp: Date.now(), level, message, context }]
+    logs: [...state.logs, { id: THREE.MathUtils.generateUUID(), timestamp: Date.now(), level, message, context }]
   })),
 
   loadAsset: (asset) => set((state) => {
@@ -81,6 +117,20 @@ export const useStore = create<AppState>((set, get) => ({
   toggleLoop: () => set((state) => ({ isLooping: !state.isLooping })),
   setCurrentTime: (time) => set({ currentTime: time }),
   setDuration: (duration) => set({ duration }),
+  setTimeScale: (scale) => set({ timeScale: Math.max(0.1, Math.min(2, scale)) }),
+
+  seekToTime: (time) => set((state) => ({
+    currentTime: Math.max(0, Math.min(time, state.duration)),
+    isPlaying: false  // Pause when seeking
+  })),
+
+  skipForward: () => set((state) => ({
+    currentTime: Math.min(state.currentTime + 1, state.duration)
+  })),
+
+  skipBackward: () => set((state) => ({
+    currentTime: Math.max(state.currentTime - 1, 0)
+  })),
 
   startRigging: (assetId) => {
     set({ isRigging: true, targetCharacterId: assetId, selectedBone: null });
@@ -88,12 +138,12 @@ export const useStore = create<AppState>((set, get) => ({
 
   updateRiggingMarker: (name, position) => set((state) => {
     const newMarkers = { ...state.riggingMarkers, [name]: position };
-    
+
     // Mirror Logic
     if (state.riggingMirrorEnabled) {
-      const mirrorName = name.startsWith('l_') 
+      const mirrorName = name.startsWith('l_')
         ? name.replace('l_', 'r_') as RiggingMarkerName
-        : name.startsWith('r_') 
+        : name.startsWith('r_')
           ? name.replace('r_', 'l_') as RiggingMarkerName
           : null;
 

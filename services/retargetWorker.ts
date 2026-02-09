@@ -1,7 +1,31 @@
 
 // This string contains the worker code. We will create a Blob URL from it.
 export const retargetWorkerScript = `
-importScripts('https://unpkg.com/three@0.160.0/build/three.min.js');
+// Try to load Three.js with multiple fallbacks (using 0.149 to avoid deprecation warnings)
+let loaded = false;
+const cdns = [
+    'https://unpkg.com/three@0.149.0/build/three.min.js',
+    'https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.min.js',
+    'https://cdnjs.cloudflare.com/ajax/libs/three.js/r149/three.min.js'
+];
+
+for (const url of cdns) {
+    if (loaded) break;
+    try {
+        importScripts(url);
+        if (typeof THREE !== 'undefined') {
+            loaded = true;
+        }
+    } catch(e) {
+        // Try next CDN
+    }
+}
+
+if (!loaded) {
+    self.postMessage({ type: 'ERROR', message: 'Failed to load Three.js from any CDN. Check your internet connection.' });
+} else {
+    self.postMessage({ type: 'READY' });
+}
 
 // --- HELPER CLASSES FOR V2 ---
 

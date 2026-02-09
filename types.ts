@@ -40,14 +40,14 @@ export interface AppState {
   selectedAssetId: string | null;
   targetCharacterId: string | null;
   sourceAnimationId: string | null;
-  
+
   boneMapping: BoneMap;
   selectedBone: string | null;
-  
+
   retargetSettings: RetargetSettings;
-  
+
   logs: LogEntry[];
-  
+
   // Animation State
   activeClip: AnimationClip | null;
   isPlaying: boolean;
@@ -55,17 +55,17 @@ export interface AppState {
   currentTime: number;
   duration: number;
   timeScale: number;
-  
+
   // Rigging State
   isRigging: boolean;
   riggingMirrorEnabled: boolean;
   riggingMarkers: Record<RiggingMarkerName, [number, number, number]>;
-  
+
   // UI Toggles
   showSkeleton: boolean;
   showWireframe: boolean;
   showAxes: boolean;
-  
+
   // Actions
   addLog: (level: LogEntry['level'], message: string, context?: any) => void;
   loadAsset: (asset: LoadedAsset) => void;
@@ -76,14 +76,18 @@ export interface AppState {
   updateBoneMapping: (mapping: BoneMap) => void;
   selectBone: (name: string | null) => void;
   updateRetargetSettings: (settings: Partial<RetargetSettings>) => void;
-  
+
   // Animation Actions
   setActiveClip: (clip: AnimationClip | null) => void;
   setIsPlaying: (playing: boolean) => void;
   toggleLoop: () => void;
   setCurrentTime: (time: number) => void;
   setDuration: (duration: number) => void;
-  
+  setTimeScale: (scale: number) => void;
+  seekToTime: (time: number) => void;
+  skipForward: () => void;
+  skipBackward: () => void;
+
   // Rigging Actions
   startRigging: (assetId: string) => void;
   updateRiggingMarker: (name: RiggingMarkerName, position: [number, number, number]) => void;
