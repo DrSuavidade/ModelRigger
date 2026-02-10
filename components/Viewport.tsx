@@ -12,6 +12,7 @@ import * as THREE from "three";
 import { useStore } from "../state/store";
 import { SkeletonHelper } from "three";
 import { RiggingMarkerName } from "../types";
+import { computeWeightPreviewFromMarkers, BONE_COLORS } from "../utils/autoRig";
 
 const RiggingMarkers = () => {
   const { riggingMarkers, updateRiggingMarker } = useStore();
@@ -37,6 +38,17 @@ const RiggingMarkers = () => {
         const position = new THREE.Vector3(...pos);
         const isSelected = activeMarker === name;
 
+        // Smaller markers for smaller joints
+        const smallMarkers: RiggingMarkerName[] = [
+          "l_toe",
+          "r_toe",
+          "l_ankle",
+          "r_ankle",
+          "l_shoulder",
+          "r_shoulder",
+        ];
+        const markerSize = smallMarkers.includes(name) ? 0.05 : 0.08;
+
         return (
           <group key={name}>
             {/* Visual Sphere */}
@@ -47,7 +59,7 @@ const RiggingMarkers = () => {
                 setActiveMarker(name);
               }}
             >
-              <sphereGeometry args={[0.08, 16, 16]} />
+              <sphereGeometry args={[markerSize, 16, 16]} />
               <meshBasicMaterial
                 color={isSelected ? "#ffffff" : "#39ff14"}
                 depthTest={false}
@@ -58,7 +70,7 @@ const RiggingMarkers = () => {
 
             {/* Glow Ring */}
             <mesh position={position}>
-              <ringGeometry args={[0.08, 0.12, 32]} />
+              <ringGeometry args={[markerSize, markerSize * 1.5, 32]} />
               <meshBasicMaterial
                 color="#39ff14"
                 side={THREE.DoubleSide}
@@ -86,6 +98,7 @@ const RiggingMarkers = () => {
                 position={position}
                 mode="translate"
                 onObjectChange={(e: any) => handleChange(name, e.target.object)}
+                // @ts-ignore — onDraggingChanged works at runtime but isn't in Drei's type defs
                 onDraggingChanged={(e: any) => {
                   const orbitControls = controls as any;
                   if (orbitControls) {
@@ -112,14 +125,112 @@ const RiggingMarkers = () => {
   );
 };
 
+/**
+ * Weight Preview Component (Phase 3.3)
+ * Computes weight preview live from marker positions on raw mesh geometry.
+ * No SkinnedMesh required — works during rigging mode before skeleton creation.
+ */
+const WeightPreview = ({
+  object,
+  markers,
+}: {
+  object: THREE.Object3D;
+  markers: Record<RiggingMarkerName, [number, number, number]>;
+}) => {
+  const meshRef = useRef<THREE.Group>(null);
+
+  useEffect(() => {
+    if (!meshRef.current) return;
+
+    // Clear previous overlay
+    const group = meshRef.current;
+    while (group.children.length > 0) {
+      const child = group.children[0];
+      group.remove(child);
+      if ((child as THREE.Mesh).geometry)
+        (child as THREE.Mesh).geometry.dispose();
+      if ((child as THREE.Mesh).material) {
+        const mat = (child as THREE.Mesh).material;
+        if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+        else mat.dispose();
+      }
+    }
+
+    // Find all Mesh objects in the scene and compute weight colors from markers
+    object.traverse((child) => {
+      if ((child as THREE.Mesh).isMesh) {
+        const mesh = child as THREE.Mesh;
+        const geom = mesh.geometry;
+
+        if (!geom.attributes.position) return;
+
+        // Compute vertex colors from markers (no skinning data needed)
+        const colors = computeWeightPreviewFromMarkers(geom, markers);
+
+        // Create overlay
+        const overlayGeom = geom.clone();
+        overlayGeom.setAttribute(
+          "color",
+          new THREE.Float32BufferAttribute(colors, 3),
+        );
+
+        const overlayMat = new THREE.MeshBasicMaterial({
+          vertexColors: true,
+          transparent: true,
+          opacity: 0.85,
+          side: THREE.DoubleSide,
+          depthTest: true,
+          depthWrite: false,
+        });
+
+        const overlayMesh = new THREE.Mesh(overlayGeom, overlayMat);
+        overlayMesh.position.copy(mesh.position);
+        overlayMesh.rotation.copy(mesh.rotation);
+        overlayMesh.scale.copy(mesh.scale);
+
+        // Copy world transform if mesh has parent transforms
+        if (mesh.parent && mesh.parent !== object) {
+          mesh.parent.updateWorldMatrix(true, false);
+          overlayMesh.applyMatrix4(mesh.parent.matrixWorld);
+        }
+
+        group.add(overlayMesh);
+      }
+    });
+
+    return () => {
+      if (meshRef.current) {
+        while (meshRef.current.children.length > 0) {
+          const child = meshRef.current.children[0];
+          meshRef.current.remove(child);
+          if ((child as THREE.Mesh).geometry)
+            (child as THREE.Mesh).geometry.dispose();
+          if ((child as THREE.Mesh).material) {
+            const mat = (child as THREE.Mesh).material;
+            if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+            else mat.dispose();
+          }
+        }
+      }
+    };
+  }, [object, markers]);
+
+  return <group ref={meshRef} />;
+};
+
 const SceneContent = () => {
   const {
     assets,
     targetCharacterId,
+    sourceAnimationId,
     showSkeleton,
+    showMesh,
+    viewMode,
     selectedBone,
     selectBone,
     isRigging,
+    weightPreviewMode,
+    riggingMarkers,
     activeClip,
     isPlaying,
     isLooping,
@@ -131,10 +242,15 @@ const SceneContent = () => {
   } = useStore();
 
   const targetChar = assets.find((a) => a.id === targetCharacterId);
+  const sourceChar = assets.find((a) => a.id === sourceAnimationId);
   const skeletonRef = useRef<THREE.Object3D>(null);
   const mixerRef = useRef<THREE.AnimationMixer | null>(null);
   const actionRef = useRef<THREE.AnimationAction | null>(null);
   const lastUserSeekTime = useRef<number>(-1);
+
+  // Visibility flags
+  const showTarget = viewMode === "target" || viewMode === "both";
+  const showSource = viewMode === "source" || viewMode === "both";
 
   // Get the clip to play (priority: activeClip from retargeting, then imported clips)
   const clipToPlay = activeClip || targetChar?.clips?.[0];
@@ -283,50 +399,74 @@ const SceneContent = () => {
         cellColor="#111116"
       />
 
-      {/* Render Character */}
-      {targetChar?.object && (
-        <primitive
-          object={targetChar.object}
-          ref={skeletonRef}
-          onClick={(e: any) => {
-            if (isRigging) return; // Disable bone selection during rigging
-            e.stopPropagation();
-            if (e.object.type === "Bone") {
-              selectBone(e.object.name);
-            }
-          }}
-        />
+      {/* Render Target Character */}
+      {showTarget && targetChar?.object && (
+        <group visible={showMesh || showSkeleton || isRigging}>
+          <primitive
+            object={targetChar.object}
+            ref={skeletonRef}
+            visible={showMesh}
+            onClick={(e: any) => {
+              if (isRigging) return;
+              e.stopPropagation();
+              if (e.object.type === "Bone") {
+                selectBone(e.object.name);
+              }
+            }}
+          />
+        </group>
+      )}
+
+      {/* Render Source Character (offset to the left for comparison) */}
+      {showSource && sourceChar?.object && (
+        <group position={viewMode === "both" ? [-2, 0, 0] : [0, 0, 0]}>
+          <primitive object={sourceChar.object} />
+          {showSkeleton && <SkeletonOverlay object={sourceChar.object} />}
+        </group>
       )}
 
       {/* Helpers */}
-      {showSkeleton && targetChar?.object && !isRigging && (
+      {showSkeleton && showTarget && targetChar?.object && !isRigging && (
         <SkeletonOverlay object={targetChar.object} />
       )}
 
       {/* Rigging Mode Overlay */}
       {isRigging && <RiggingMarkers />}
+
+      {/* Weight Preview (Phase 3.3) */}
+      {weightPreviewMode && targetChar?.object && (
+        <WeightPreview object={targetChar.object} markers={riggingMarkers} />
+      )}
     </>
   );
 };
 
 const SkeletonOverlay = ({ object }: { object: THREE.Object3D }) => {
   const ref = useRef<THREE.Object3D>(object);
+  // @ts-ignore — useHelper accepts 3 args at runtime but Drei types only declare 2
   useHelper(ref as any, SkeletonHelper, "#39ff14");
   return null;
+};
+
+const ViewportLabel = () => {
+  const isRigging = useStore((s) => s.isRigging);
+  return (
+    <div className="absolute top-4 left-4 z-10 text-xs font-mono text-gray-500 pointer-events-none">
+      VIEWPORT [ACTIVE]
+      <br />
+      {isRigging ? (
+        <span className="text-acid-magenta animate-pulse">RIGGING MODE</span>
+      ) : (
+        "GRID: 1M"
+      )}
+    </div>
+  );
 };
 
 export const Viewport = () => {
   return (
     <div className="w-full h-full bg-[#050508] relative border-x-2 border-[#111]">
-      <div className="absolute top-4 left-4 z-10 text-xs font-mono text-gray-500 pointer-events-none">
-        VIEWPORT [ACTIVE]
-        <br />
-        {useStore.getState().isRigging ? (
-          <span className="text-acid-magenta animate-pulse">RIGGING MODE</span>
-        ) : (
-          "GRID: 1M"
-        )}
-      </div>
+      <ViewportLabel />
       <Canvas
         camera={{ position: [0, 1.5, 3], fov: 50 }}
         shadows

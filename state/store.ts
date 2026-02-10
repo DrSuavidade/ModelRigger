@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { AppState, LoadedAsset, LogEntry, RetargetSettings, RiggingMarkerName } from '../types';
+import { captureSnapshot, popUndo, popRedo, UndoableSnapshot } from './history';
 import * as THREE from 'three';
 
 // Loading state interface
@@ -41,21 +42,32 @@ export const useStore = create<ExtendedAppState>((set, get) => ({
   timeScale: 1,
 
   showSkeleton: true,
+  showMesh: true,
   showWireframe: false,
   showAxes: false,
+  viewMode: 'both',
 
   isRigging: false,
   riggingMirrorEnabled: true,
   riggingMarkers: {
     chin: [0, 1.7, 0.1],
     pelvis: [0, 0.9, 0],
+    spine_mid: [0, 1.15, 0],
+    chest: [0, 1.4, 0],
+    l_shoulder: [0.18, 1.45, -0.02],
+    r_shoulder: [-0.18, 1.45, -0.02],
     l_wrist: [0.4, 1.0, 0],
     r_wrist: [-0.4, 1.0, 0],
     l_elbow: [0.25, 1.2, -0.05],
     r_elbow: [-0.25, 1.2, -0.05],
     l_knee: [0.1, 0.5, 0.05],
-    r_knee: [-0.1, 0.5, 0.05]
+    r_knee: [-0.1, 0.5, 0.05],
+    l_ankle: [0.1, 0.08, 0.02],
+    r_ankle: [-0.1, 0.08, 0.02],
+    l_toe: [0.1, 0.02, 0.1],
+    r_toe: [-0.1, 0.02, 0.1],
   },
+  weightPreviewMode: false,
 
   // Loading state
   loading: {
@@ -78,9 +90,13 @@ export const useStore = create<ExtendedAppState>((set, get) => ({
     }
   }),
 
-  addLog: (level, message, context) => set((state) => ({
-    logs: [...state.logs, { id: THREE.MathUtils.generateUUID(), timestamp: Date.now(), level, message, context }]
-  })),
+  addLog: (level, message, context) => set((state) => {
+    const newLog = { id: THREE.MathUtils.generateUUID(), timestamp: Date.now(), level, message, context };
+    const logs = state.logs.length >= 500
+      ? [...state.logs.slice(-499), newLog]
+      : [...state.logs, newLog];
+    return { logs };
+  }),
 
   loadAsset: (asset) => set((state) => {
     const newState: Partial<AppState> = { assets: [...state.assets, asset] };
@@ -101,15 +117,19 @@ export const useStore = create<ExtendedAppState>((set, get) => ({
   setTargetCharacter: (id) => set({ targetCharacterId: id }),
   setSourceAnimation: (id) => set({ sourceAnimationId: id }),
 
-  updateBoneMapping: (mapping) => set((state) => ({
-    boneMapping: { ...state.boneMapping, ...mapping }
-  })),
+  updateBoneMapping: (mapping) => {
+    const s = get();
+    captureSnapshot({ boneMapping: s.boneMapping, riggingMarkers: s.riggingMarkers, retargetSettings: s.retargetSettings });
+    set({ boneMapping: mapping });
+  },
 
   selectBone: (name) => set({ selectedBone: name }),
 
-  updateRetargetSettings: (settings) => set((state) => ({
-    retargetSettings: { ...state.retargetSettings, ...settings }
-  })),
+  updateRetargetSettings: (settings) => {
+    const s = get();
+    captureSnapshot({ boneMapping: s.boneMapping, riggingMarkers: s.riggingMarkers, retargetSettings: s.retargetSettings });
+    set({ retargetSettings: { ...s.retargetSettings, ...settings } });
+  },
 
   // Animation Actions
   setActiveClip: (clip) => set({ activeClip: clip, duration: clip ? clip.duration : 0, currentTime: 0, isPlaying: true }),
@@ -131,6 +151,34 @@ export const useStore = create<ExtendedAppState>((set, get) => ({
   skipBackward: () => set((state) => ({
     currentTime: Math.max(state.currentTime - 1, 0)
   })),
+
+  setShowMesh: (show) => set({ showMesh: show }),
+  setShowSkeleton: (show) => set({ showSkeleton: show }),
+  setViewMode: (mode) => set({ viewMode: mode }),
+
+  // --- Undo / Redo ---
+  pushSnapshot: () => {
+    const s = get();
+    captureSnapshot({ boneMapping: s.boneMapping, riggingMarkers: s.riggingMarkers, retargetSettings: s.retargetSettings });
+  },
+
+  undo: () => {
+    const s = get();
+    const current: UndoableSnapshot = { boneMapping: s.boneMapping, riggingMarkers: s.riggingMarkers, retargetSettings: s.retargetSettings };
+    const snapshot = popUndo(current);
+    if (snapshot) {
+      set({ ...snapshot });
+    }
+  },
+
+  redo: () => {
+    const s = get();
+    const current: UndoableSnapshot = { boneMapping: s.boneMapping, riggingMarkers: s.riggingMarkers, retargetSettings: s.retargetSettings };
+    const snapshot = popRedo(current);
+    if (snapshot) {
+      set({ ...snapshot });
+    }
+  },
 
   startRigging: (assetId) => {
     set({ isRigging: true, targetCharacterId: assetId, selectedBone: null });
@@ -157,7 +205,11 @@ export const useStore = create<ExtendedAppState>((set, get) => ({
 
   setRiggingMirror: (enabled) => set({ riggingMirrorEnabled: enabled }),
 
-  cancelRigging: () => set({ isRigging: false }),
+  setRiggingMarkers: (markers) => set({ riggingMarkers: markers }),
+
+  cancelRigging: () => set({ isRigging: false, targetCharacterId: null }),
+
+  setWeightPreviewMode: (enabled) => set({ weightPreviewMode: enabled }),
 
   completeRigging: (skeleton, skinnedObject) => set((state) => {
     const assets = state.assets.map(a => {

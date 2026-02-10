@@ -1,0 +1,109 @@
+@import "tailwindcss";
+
+/* ===== NEON-RIG Design System ===== */
+
+@theme {
+  /* Colors */
+  --color-acid-black: #07070A;
+  --color-acid-green: #39ff14;
+  --color-acid-magenta: #ff00ff;
+  --color-acid-cyan: #00ffff;
+  --color-acid-orange: #ff5f00;
+  --color-acid-violet: #bf00ff;
+  --color-acid-dark: #111116;
+
+  /* Fonts */
+  --font-display: "Oswald", sans-serif;
+  --font-mono: "Space Mono", monospace;
+
+  /* Shadows */
+  --shadow-neon-green: 0 0 5px #39ff14, 0 0 10px #39ff14;
+  --shadow-neon-magenta: 0 0 5px #ff00ff, 0 0 10px #ff00ff;
+}
+
+/* ===== Base Styles ===== */
+body {
+  background-color: #07070a;
+  color: #e0e0e0;
+  overflow: hidden;
+}
+
+/* ===== Custom Scrollbar ===== */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #07070a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #333;
+  border: 1px solid #39ff14;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #39ff14;
+}
+
+/* ===== Neon Text Shadow ===== */
+.neon-text-shadow {
+  text-shadow: 0 0 2px currentColor;
+}
+
+/* ===== Responsive Layout ===== */
+
+/* Tablet and below: stack panels vertically */
+@media (max-width: 1024px) {
+  .app-main-grid {
+    flex-direction: column !important;
+  }
+
+  .app-left-panel {
+    width: 100% !important;
+    max-height: 200px;
+    border-right: none !important;
+    border-bottom: 2px solid rgba(57, 255, 20, 0.2);
+    overflow-y: auto;
+  }
+
+  .app-right-panel {
+    width: 100% !important;
+    max-height: 280px;
+    border-left: none !important;
+    border-top: 2px solid rgba(57, 255, 20, 0.2);
+    overflow-y: auto;
+  }
+
+  .app-viewport-area {
+    min-height: 300px;
+  }
+
+  .app-bottom-panel {
+    min-height: 80px;
+  }
+}
+
+/* Mobile: further compact */
+@media (max-width: 640px) {
+  .app-left-panel {
+    max-height: 150px;
+  }
+
+  .app-right-panel {
+    max-height: 220px;
+  }
+
+  .app-header {
+    height: 36px !important;
+  }
+
+  .app-header h1 {
+    font-size: 0.875rem;
+  }
+
+  .app-viewport-area {
+    min-height: 200px;
+  }
+}

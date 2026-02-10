@@ -24,6 +24,7 @@ export interface LoadedAsset {
 }
 
 export type RetargetMode = 'v1' | 'v2';
+export type ViewMode = 'target' | 'source' | 'both';
 
 export interface RetargetSettings {
   mode: RetargetMode;
@@ -33,7 +34,15 @@ export interface RetargetSettings {
   fps: 30 | 60;
 }
 
-export type RiggingMarkerName = 'chin' | 'pelvis' | 'l_wrist' | 'r_wrist' | 'l_elbow' | 'r_elbow' | 'l_knee' | 'r_knee';
+export type RiggingMarkerName =
+  | 'chin' | 'pelvis'
+  | 'spine_mid' | 'chest'
+  | 'l_shoulder' | 'r_shoulder'
+  | 'l_wrist' | 'r_wrist'
+  | 'l_elbow' | 'r_elbow'
+  | 'l_knee' | 'r_knee'
+  | 'l_ankle' | 'r_ankle'
+  | 'l_toe' | 'r_toe';
 
 export interface AppState {
   assets: LoadedAsset[];
@@ -60,11 +69,14 @@ export interface AppState {
   isRigging: boolean;
   riggingMirrorEnabled: boolean;
   riggingMarkers: Record<RiggingMarkerName, [number, number, number]>;
+  weightPreviewMode: boolean;
 
   // UI Toggles
   showSkeleton: boolean;
+  showMesh: boolean;
   showWireframe: boolean;
   showAxes: boolean;
+  viewMode: ViewMode;
 
   // Actions
   addLog: (level: LogEntry['level'], message: string, context?: any) => void;
@@ -86,12 +98,20 @@ export interface AppState {
   setTimeScale: (scale: number) => void;
   seekToTime: (time: number) => void;
   skipForward: () => void;
+  setShowMesh: (show: boolean) => void;
+  setShowSkeleton: (show: boolean) => void;
+  setViewMode: (mode: ViewMode) => void;
+  pushSnapshot: () => void;
+  undo: () => void;
+  redo: () => void;
   skipBackward: () => void;
 
   // Rigging Actions
   startRigging: (assetId: string) => void;
   updateRiggingMarker: (name: RiggingMarkerName, position: [number, number, number]) => void;
+  setRiggingMarkers: (markers: Record<RiggingMarkerName, [number, number, number]>) => void;
   setRiggingMirror: (enabled: boolean) => void;
   cancelRigging: () => void;
+  setWeightPreviewMode: (enabled: boolean) => void;
   completeRigging: (skeleton: Skeleton, skinnedMesh: Object3D) => void;
 }

@@ -56,10 +56,10 @@ Open `http://localhost:3000` (or the port shown in your terminal) to access the 
 - Drag the neon green spheres to match the character's joints (Chin, Knees, Elbows, etc.).
 - Click `GENERATE SKELETON` to bind the mesh.
 
-### 4. Bone Mapping Presets
+### 4. Rigging Presets
 
-- Use the **PRESETS** dropdown to load pre-configured bone mappings (Mixamo, VRM, etc.).
-- Click **SAVE** to save your current bone mapping as a custom preset.
+- In **Rigging Mode**, use the **PRESETS** dropdown to load pre-configured marker positions for different character types (Standard Humanoid, Tall, Short/Child, Chibi, Muscular).
+- Click **SAVE** to save your current marker positions as a custom preset.
 - Custom presets are stored in browser localStorage.
 
 ### 5. Retargeting (Modes)
@@ -92,7 +92,7 @@ Go to the **RETARGET** tab to choose your solver:
 
 ## ⚠️ KNOWN_ISSUES (Missing/Limitations)
 
-- **Auto-Rigger Weights:** The automatic skinning uses a simple distance-based falloff. It does not perform heat-diffusion or geodesic voxel binding, so armpits/crotch areas may have rough deformations.
+- **Auto-Rigger Weights:** Uses envelope-based Gaussian falloff with bone segments. Results are good for most humanoid shapes but may still produce artifacts on very complex topology (overlapping limbs, extreme poses).
 - **Complex Skeletons:** Characters with non-humanoid hierarchies (e.g., spiders, extra arms) may fail the auto-mapper.
 - **V2 Limitations:** V2 currently solves for Legs (Hips->Knee->Foot). Arms are processed via V1 FK to preserve gesture over precise hand contact, unless mapped specifically.
 
@@ -102,9 +102,18 @@ Go to the **RETARGET** tab to choose your solver:
 
 - [x] **V2 Solver (Full IK):** Basic CCD IK implemented for leg chains.
 - [x] **GLB Export:** Export retargeted animations as `.glb` files.
-- [x] **Save/Load Presets:** Save and load bone mapping presets (Mixamo, VRM, custom).
+- [x] **Save/Load Presets:** Save and load rigging marker presets for different character types.
 - [x] **Timeline Scrubbing:** Functional timeline with click-to-seek and drag scrubbing.
 - [x] **Playback Speed:** Adjustable playback speed (0.25x to 2x).
+- [x] **Enhanced Rigging:** Expanded skeleton (22 bones) with spine segments, shoulders, ankles, and toes.
+- [x] **Improved Auto-Rig Weights:** Envelope-based Gaussian falloff for smoother armpit/crotch deformation.
+- [x] **Weight Preview:** Visual bone weight heatmap for debugging skinning.
+- [x] **OpenPose JSON Import:** Import motion capture from OpenPose BODY_25 JSON output.
+- [x] **BVH Format Import:** Industry-standard BVH mocap file import with auto-scale detection.
+- [x] **Tailwind PostCSS Build:** Migrated from CDN to proper `@tailwindcss/vite` build pipeline.
+- [x] **Unit Tests:** Vitest test suite for autoRig math and skeleton generation (12 tests).
+- [x] **Keyboard Shortcuts:** Space=play, arrows=skip, L=loop, 1-5=speed, W=weights, M=mirror, ESC=cancel.
+- [x] **Responsive Layout:** Tablet/mobile breakpoints for stacked panels and compact headers.
 - [ ] **Twist Bones:** Support for forearm/thigh twist bone mapping.
 - [ ] **Timeline Editor:** Keyframe editing and curve manipulation within the UI.
 

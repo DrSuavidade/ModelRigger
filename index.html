@@ -4,66 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>NEON-RIG // RETARGETER</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <meta
+      name="description"
+      content="NEON-RIG — Advanced 3D character auto-rigging and animation retargeting tool. Import GLB, BVH, and OpenPose mocap data."
+    />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;700&family=Space+Mono:ital,wght@0,400;0,700;1,400&display=swap"
       rel="stylesheet"
     />
-    <script>
-      tailwind.config = {
-        theme: {
-          extend: {
-            colors: {
-              acid: {
-                black: "#07070A",
-                green: "#39ff14",
-                magenta: "#ff00ff",
-                cyan: "#00ffff",
-                orange: "#ff5f00",
-                violet: "#bf00ff",
-                dark: "#111116",
-              },
-            },
-            fontFamily: {
-              display: ["Oswald", "sans-serif"],
-              mono: ["Space Mono", "monospace"],
-            },
-            boxShadow: {
-              "neon-green": "0 0 5px #39ff14, 0 0 10px #39ff14",
-              "neon-magenta": "0 0 5px #ff00ff, 0 0 10px #ff00ff",
-            },
-          },
-        },
-      };
-    </script>
-    <style>
-      body {
-        background-color: #07070a;
-        color: #e0e0e0;
-        overflow: hidden;
-      }
-      /* Custom Scrollbar */
-      ::-webkit-scrollbar {
-        width: 8px;
-        height: 8px;
-      }
-      ::-webkit-scrollbar-track {
-        background: #07070a;
-      }
-      ::-webkit-scrollbar-thumb {
-        background: #333;
-        border: 1px solid #39ff14;
-      }
-      ::-webkit-scrollbar-thumb:hover {
-        background: #39ff14;
-      }
-      .neon-text-shadow {
-        text-shadow: 0 0 2px currentColor;
-      }
-    </style>
-    <!-- Vite handles module resolution at build time, no import map needed -->
     <link rel="stylesheet" href="/index.css" />
   </head>
   <body>

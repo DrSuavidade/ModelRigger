@@ -4,10 +4,13 @@ import { RightPanel } from "./components/RightPanel";
 import { BottomPanel } from "./components/BottomPanel";
 import { Viewport } from "./components/Viewport";
 import { useStore } from "./state/store";
-import { Split } from "lucide-react";
+import { Split, Keyboard, Eye, Users, User, Undo2, Redo2 } from "lucide-react";
+import { ViewMode } from "./types";
 import { ErrorBoundary, PanelErrorBoundary } from "./components/ErrorBoundary";
 import { LoadingOverlay } from "./components/LoadingOverlay";
 import { usePerformanceStats } from "./hooks/usePerformanceStats";
+import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
+import { useHistoryState } from "./hooks/useHistoryState";
 
 // Performance Stats Display Component
 const PerformanceMonitor = () => {
@@ -37,8 +40,45 @@ const PerformanceMonitor = () => {
 };
 
 export default function App() {
-  const { isRigging, riggingMirrorEnabled, setRiggingMirror, loading } =
-    useStore();
+  const {
+    isRigging,
+    riggingMirrorEnabled,
+    setRiggingMirror,
+    loading,
+    showMesh,
+    setShowMesh,
+    showSkeleton,
+    setShowSkeleton,
+    viewMode,
+    setViewMode,
+  } = useStore();
+  const { undo, redo } = useStore();
+
+  // Register global keyboard shortcuts
+  useKeyboardShortcuts();
+
+  const history = useHistoryState();
+
+  const viewModes: {
+    key: ViewMode;
+    label: string;
+    icon: React.ReactNode;
+    title: string;
+  }[] = [
+    {
+      key: "target",
+      label: "T",
+      icon: <User size={12} />,
+      title: "Target Only",
+    },
+    { key: "both", label: "A", icon: <Users size={12} />, title: "Both" },
+    {
+      key: "source",
+      label: "S",
+      icon: <Eye size={12} />,
+      title: "Source Only",
+    },
+  ];
 
   return (
     <ErrorBoundary>
@@ -52,38 +92,119 @@ export default function App() {
         />
 
         {/* Header */}
-        <header className="h-10 border-b border-gray-800 flex items-center px-4 justify-between bg-[#0a0a0e] z-50 relative">
+        <header className="app-header h-10 border-b border-gray-800 flex items-center px-4 justify-between bg-[#0a0a0e] z-50 relative">
           <div className="flex items-center gap-2">
             <div className="w-3 h-3 bg-acid-green rounded-full animate-pulse shadow-neon-green"></div>
             <h1 className="font-display text-lg tracking-widest text-white neon-text-shadow">
               NEON-RIG{" "}
-              <span className="text-acid-magenta text-xs align-top">V1.2</span>
+              <span className="text-acid-magenta text-xs align-top">V1.3</span>
             </h1>
           </div>
-          <PerformanceMonitor />
+          <div className="flex items-center gap-4">
+            <PerformanceMonitor />
+
+            {/* Undo / Redo */}
+            <div className="flex items-center gap-1">
+              <button
+                onClick={undo}
+                disabled={!history.canUndo}
+                className={`w-7 h-7 flex items-center justify-center rounded transition-all ${
+                  history.canUndo
+                    ? "text-acid-cyan hover:bg-acid-cyan/10 hover:shadow-[0_0_6px_rgba(0,255,255,0.2)]"
+                    : "text-gray-700 cursor-not-allowed"
+                }`}
+                title={`Undo (Ctrl+Z) — ${history.undoCount} step${history.undoCount !== 1 ? "s" : ""}`}
+              >
+                <Undo2 size={14} />
+              </button>
+              <button
+                onClick={redo}
+                disabled={!history.canRedo}
+                className={`w-7 h-7 flex items-center justify-center rounded transition-all ${
+                  history.canRedo
+                    ? "text-acid-cyan hover:bg-acid-cyan/10 hover:shadow-[0_0_6px_rgba(0,255,255,0.2)]"
+                    : "text-gray-700 cursor-not-allowed"
+                }`}
+                title={`Redo (Ctrl+Shift+Z) — ${history.redoCount} step${history.redoCount !== 1 ? "s" : ""}`}
+              >
+                <Redo2 size={14} />
+              </button>
+            </div>
+
+            <div className="w-px h-5 bg-gray-800" />
+
+            <div
+              className="hidden md:flex items-center gap-1 text-gray-600 text-[9px] font-mono"
+              title="Space=Play · ←→=Skip · L=Loop · 1-5=Speed · W=Weights · M=Mirror · Ctrl+Z=Undo · Esc=Cancel"
+            >
+              <Keyboard size={10} />
+              <span>SHORTCUTS</span>
+            </div>
+          </div>
         </header>
 
         {/* Main Grid */}
-        <div className="flex-1 flex overflow-hidden relative">
+        <div className="app-main-grid flex-1 flex overflow-hidden relative">
           <PanelErrorBoundary panelName="ASSET_DECK">
-            <LeftPanel />
+            <div className="app-left-panel">
+              <LeftPanel />
+            </div>
           </PanelErrorBoundary>
 
-          <main className="flex-1 flex flex-col relative min-w-0">
+          <main className="app-viewport-area flex-1 flex flex-col relative min-w-0">
             <div className="flex-1 relative">
               <PanelErrorBoundary panelName="VIEWPORT">
                 <Viewport />
               </PanelErrorBoundary>
 
               {/* Overlay UI Elements in Viewport */}
-              <div className="absolute top-4 right-4 flex flex-col gap-2 pointer-events-auto">
-                <button className="w-8 h-8 bg-black border border-gray-700 hover:border-acid-cyan text-acid-cyan flex items-center justify-center rounded">
-                  <span className="font-display font-bold">3D</span>
-                </button>
-                <button className="w-8 h-8 bg-black border border-gray-700 hover:border-acid-green text-acid-green flex items-center justify-center rounded">
-                  <span className="font-display font-bold">SK</span>
+              <div className="absolute top-4 right-4 flex flex-col gap-2 pointer-events-auto z-10">
+                {/* 3D Mesh Toggle */}
+                <button
+                  onClick={() => setShowMesh(!showMesh)}
+                  className={`w-8 h-8 border flex items-center justify-center rounded transition-all ${
+                    showMesh
+                      ? "bg-acid-cyan/10 border-acid-cyan text-acid-cyan shadow-[0_0_8px_rgba(0,255,255,0.3)]"
+                      : "bg-black border-gray-700 text-gray-600 hover:text-gray-400 hover:border-gray-500"
+                  }`}
+                  title={showMesh ? "Hide Mesh" : "Show Mesh"}
+                >
+                  <span className="font-display font-bold text-xs">3D</span>
                 </button>
 
+                {/* Skeleton Toggle */}
+                <button
+                  onClick={() => setShowSkeleton(!showSkeleton)}
+                  className={`w-8 h-8 border flex items-center justify-center rounded transition-all ${
+                    showSkeleton
+                      ? "bg-acid-green/10 border-acid-green text-acid-green shadow-[0_0_8px_rgba(57,255,20,0.3)]"
+                      : "bg-black border-gray-700 text-gray-600 hover:text-gray-400 hover:border-gray-500"
+                  }`}
+                  title={showSkeleton ? "Hide Skeleton" : "Show Skeleton"}
+                >
+                  <span className="font-display font-bold text-xs">SK</span>
+                </button>
+
+                {/* Divider */}
+                <div className="w-8 h-px bg-gray-700 mx-auto" />
+
+                {/* View Mode: Target / Both / Source */}
+                {viewModes.map(({ key, icon, title }) => (
+                  <button
+                    key={key}
+                    onClick={() => setViewMode(key)}
+                    className={`w-8 h-8 border flex items-center justify-center rounded transition-all ${
+                      viewMode === key
+                        ? "bg-acid-magenta/10 border-acid-magenta text-acid-magenta shadow-[0_0_8px_rgba(255,0,255,0.3)]"
+                        : "bg-black border-gray-700 text-gray-600 hover:text-gray-400 hover:border-gray-500"
+                    }`}
+                    title={title}
+                  >
+                    {icon}
+                  </button>
+                ))}
+
+                {/* Mirror Toggle (only in rigging mode) */}
                 {isRigging && (
                   <button
                     onClick={() => setRiggingMirror(!riggingMirrorEnabled)}
@@ -101,12 +222,16 @@ export default function App() {
             </div>
 
             <PanelErrorBoundary panelName="TIMELINE">
-              <BottomPanel />
+              <div className="app-bottom-panel">
+                <BottomPanel />
+              </div>
             </PanelErrorBoundary>
           </main>
 
           <PanelErrorBoundary panelName="OPERATIONS">
-            <RightPanel />
+            <div className="app-right-panel">
+              <RightPanel />
+            </div>
           </PanelErrorBoundary>
         </div>
       </div>
