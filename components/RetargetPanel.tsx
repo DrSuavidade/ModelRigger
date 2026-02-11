@@ -220,6 +220,9 @@ export const RetargetPanel: React.FC = () => {
       targetChains,
       fps: retargetSettings.fps,
       duration: clip.duration,
+      // Pass transformation scales
+      sourceScale: sourceAsset.object ? sourceAsset.object.scale.y : 1,
+      targetScale: targetAsset.object ? targetAsset.object.scale.y : 1,
     });
   };
 

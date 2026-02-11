@@ -37,6 +37,7 @@ export const BONE_NAMES = [
     'RightUpLeg', 'RightLeg', 'RightFoot', 'RightToeBase',
     'LeftShoulder', 'LeftArm', 'LeftForeArm', 'LeftHand',
     'RightShoulder', 'RightArm', 'RightForeArm', 'RightHand',
+    'Head_End',
 ];
 
 /**
@@ -72,6 +73,7 @@ interface ResolvedMarkerPositions {
     r_ankle: THREE.Vector3;
     l_toe: THREE.Vector3;
     r_toe: THREE.Vector3;
+    head: THREE.Vector3;
     // Derived
     neckPos: THREE.Vector3;
     spine2Pos: THREE.Vector3;
@@ -88,27 +90,38 @@ interface ResolvedMarkerPositions {
  * This is the SINGLE source of truth for marker → position conversion.
  */
 function resolveMarkerPositions(markers: Record<RiggingMarkerName, [number, number, number]>): ResolvedMarkerPositions {
-    const getPos = (name: RiggingMarkerName) => new THREE.Vector3(...markers[name]);
+    const getPos = (name: RiggingMarkerName) => {
+        // Safe access (in case old presets don't have head)
+        return markers[name] ? new THREE.Vector3(...markers[name]) : null;
+    };
 
-    const chin = getPos('chin');
-    const pelvis = getPos('pelvis');
-    const spine_mid = getPos('spine_mid');
-    const chest = getPos('chest');
-    const l_shoulder = getPos('l_shoulder');
-    const r_shoulder = getPos('r_shoulder');
-    const l_wrist = getPos('l_wrist');
-    const r_wrist = getPos('r_wrist');
-    const l_elbow = getPos('l_elbow');
-    const r_elbow = getPos('r_elbow');
-    const l_knee = getPos('l_knee');
-    const r_knee = getPos('r_knee');
-    const l_ankle = getPos('l_ankle');
-    const r_ankle = getPos('r_ankle');
-    const l_toe = getPos('l_toe');
-    const r_toe = getPos('r_toe');
+    const chin = getPos('chin')!;
+    const pelvis = getPos('pelvis')!;
+    const spine_mid = getPos('spine_mid')!;
+    const chest = getPos('chest')!;
+    const l_shoulder = getPos('l_shoulder')!;
+    const r_shoulder = getPos('r_shoulder')!;
+    const l_wrist = getPos('l_wrist')!;
+    const r_wrist = getPos('r_wrist')!;
+    const l_elbow = getPos('l_elbow')!;
+    const r_elbow = getPos('r_elbow')!;
+    const l_knee = getPos('l_knee')!;
+    const r_knee = getPos('r_knee')!;
+    const l_ankle = getPos('l_ankle')!;
+    const r_ankle = getPos('r_ankle')!;
+    const l_toe = getPos('l_toe')!;
+    const r_toe = getPos('r_toe')!;
+
+    // Robust Head calculation
+    let head = getPos('head');
+    if (!head) {
+        // Fallback: Estimate head top -> 20cm above chin
+        const up = new THREE.Vector3(0, 1, 0);
+        head = chin.clone().add(up.multiplyScalar(0.2));
+    }
 
     // Derived positions
-    const neckPos = new THREE.Vector3().lerpVectors(chest, chin, 0.6);
+    const neckPos = new THREE.Vector3().lerpVectors(chest, chin, 0.5);
     const spine2Pos = new THREE.Vector3().lerpVectors(chest, neckPos, 0.3);
 
     const l_hip_joint = pelvis.clone(); l_hip_joint.x = l_knee.x * 0.8;
@@ -117,11 +130,13 @@ function resolveMarkerPositions(markers: Record<RiggingMarkerName, [number, numb
     const l_armStart = new THREE.Vector3().lerpVectors(l_shoulder, l_elbow, 0.3);
     const r_armStart = new THREE.Vector3().lerpVectors(r_shoulder, r_elbow, 0.3);
 
-    const bodyHeight = chin.y || 1.7;
+    const bodyHeight = head.y > 0.1 ? head.y : (chin.y || 1.7);
     const baseRadius = bodyHeight * 0.08;
 
     return {
-        chin, pelvis, spine_mid, chest,
+        chin,
+        head: head as THREE.Vector3,
+        pelvis, spine_mid, chest,
         l_shoulder, r_shoulder, l_wrist, r_wrist,
         l_elbow, r_elbow, l_knee, r_knee,
         l_ankle, r_ankle, l_toe, r_toe,
@@ -144,8 +159,8 @@ function buildSegments(pos: ResolvedMarkerPositions): BoneSegment[] {
         { boneIndex: 1, boneName: 'Spine', start: pos.spine_mid, end: pos.chest, radius: baseRadius * 1.5 },
         { boneIndex: 2, boneName: 'Spine1', start: pos.chest, end: pos.spine2Pos, radius: baseRadius * 1.4 },
         { boneIndex: 3, boneName: 'Spine2', start: pos.spine2Pos, end: pos.neckPos, radius: baseRadius * 1.2 },
-        { boneIndex: 4, boneName: 'Neck', start: pos.neckPos, end: new THREE.Vector3().lerpVectors(pos.neckPos, pos.chin, 0.5), radius: baseRadius * 0.6 },
-        { boneIndex: 5, boneName: 'Head', start: new THREE.Vector3().lerpVectors(pos.neckPos, pos.chin, 0.5), end: pos.chin.clone().add(new THREE.Vector3(0, 0.15, 0)), radius: baseRadius * 1.0 },
+        { boneIndex: 4, boneName: 'Neck', start: pos.neckPos, end: pos.chin, radius: baseRadius * 0.6 },
+        { boneIndex: 5, boneName: 'Head', start: pos.chin, end: pos.head, radius: baseRadius * 1.0 },
 
         // Left leg segments
         { boneIndex: 6, boneName: 'LeftUpLeg', start: pos.l_hip_joint, end: pos.l_knee, radius: baseRadius * 1.1 },
@@ -175,6 +190,8 @@ function buildSegments(pos: ResolvedMarkerPositions): BoneSegment[] {
 
 /**
  * Distance from point to line segment (3D)
+ * Optimized to reuse vector instances if possible, but for now we create locals.
+ * (Ideally we'd pass in temp vectors to avoid allocation, but this is fast enough for now).
  */
 function distanceToSegment(point: THREE.Vector3, segStart: THREE.Vector3, segEnd: THREE.Vector3): number {
     const ab = new THREE.Vector3().subVectors(segEnd, segStart);
@@ -193,8 +210,80 @@ function distanceToSegment(point: THREE.Vector3, segStart: THREE.Vector3, segEnd
 }
 
 /**
+ * Shared Helper: Calculate weights for a single vertex against all segments.
+ * Returns the top 4 bone indices and weights via the output objects to avoid allocation.
+ */
+interface BoneWeightInfo {
+    index: number;
+    weight: number;
+}
+// Reuse array for sorting to avoid allocation
+const _tempBoneWeights: BoneWeightInfo[] = [];
+for (let i = 0; i < 30; i++) _tempBoneWeights.push({ index: 0, weight: 0 }); // Max 22 bones + buffer
+
+function calculateWeightsForVertex(
+    vertex: THREE.Vector3,
+    segments: BoneSegment[],
+    outIndices: number[],
+    outWeights: number[]
+) {
+    // 1. Calculate weight for each segment
+    let count = 0;
+    for (const seg of segments) {
+        const dist = distanceToSegment(vertex, seg.start, seg.end);
+        const normalizedDist = dist / seg.radius;
+        let w = Math.exp(-(normalizedDist * normalizedDist));
+
+        if (normalizedDist > 1.0) {
+            w *= 1.0 / (1.0 + (normalizedDist - 1.0) * 2.0);
+        }
+
+        // Direct assign to temp array
+        if (count < _tempBoneWeights.length) {
+            _tempBoneWeights[count].index = seg.boneIndex;
+            _tempBoneWeights[count].weight = w;
+            count++;
+        }
+    }
+
+    // 2. Sort partial array (only used slots)
+    // Insertion sort or standard sort is fine for ~22 items
+    const usedWeights = _tempBoneWeights.slice(0, count); // Slice is cheap-ish, but sort in place would be better. 
+    // Actually, Array.prototype.sort is optimized.
+    usedWeights.sort((a, b) => b.weight - a.weight);
+
+    // 3. Take Top 4
+    let totalWeight = 0;
+    for (let i = 0; i < 4; i++) {
+        if (i < count) {
+            outIndices[i] = usedWeights[i].index;
+            outWeights[i] = usedWeights[i].weight;
+            totalWeight += usedWeights[i].weight;
+        } else {
+            outIndices[i] = 0;
+            outWeights[i] = 0;
+        }
+    }
+
+    // 4. Normalize
+    if (totalWeight > 0) {
+        const invTotal = 1.0 / totalWeight;
+        for (let i = 0; i < 4; i++) {
+            outWeights[i] *= invTotal;
+        }
+    } else {
+        // Fallback to root
+        outIndices[0] = 0;
+        outWeights[0] = 1;
+        outWeights[1] = 0;
+        outWeights[2] = 0;
+        outWeights[3] = 0;
+    }
+}
+
+
+/**
  * Compute envelope-based skin weights with smooth falloff.
- * Uses bone segments for distance calculation with Gaussian-like falloff.
  */
 function computeEnvelopeWeights(
     geometry: THREE.BufferGeometry,
@@ -206,103 +295,20 @@ function computeEnvelopeWeights(
     const skinWeights: number[] = [];
     const vertex = new THREE.Vector3();
 
+    // Temps for per-vertex result
+    const idx = [0, 0, 0, 0];
+    const wgt = [0, 0, 0, 0];
+
     for (let i = 0; i < positionAttribute.count; i++) {
         vertex.fromBufferAttribute(positionAttribute, i);
 
-        const boneWeights: { index: number; weight: number }[] = [];
+        calculateWeightsForVertex(vertex, segments, idx, wgt);
 
-        for (const seg of segments) {
-            const dist = distanceToSegment(vertex, seg.start, seg.end);
-            const normalizedDist = dist / seg.radius;
-            let w = Math.exp(-(normalizedDist * normalizedDist));
-
-            if (normalizedDist > 1.0) {
-                w *= 1.0 / (1.0 + (normalizedDist - 1.0) * 2.0);
-            }
-
-            boneWeights.push({ index: seg.boneIndex, weight: w });
-        }
-
-        boneWeights.sort((a, b) => b.weight - a.weight);
-
-        // Merge weights for same bone index
-        const mergedMap = new Map<number, number>();
-        for (const bw of boneWeights) {
-            mergedMap.set(bw.index, (mergedMap.get(bw.index) || 0) + bw.weight);
-        }
-
-        const merged = Array.from(mergedMap.entries())
-            .map(([index, weight]) => ({ index, weight }))
-            .sort((a, b) => b.weight - a.weight);
-
-        // Take top 4
-        const indices = [0, 0, 0, 0];
-        const weights = [0, 0, 0, 0];
-        let totalWeight = 0;
-
-        for (let j = 0; j < Math.min(4, merged.length); j++) {
-            indices[j] = merged[j].index;
-            weights[j] = merged[j].weight;
-            totalWeight += merged[j].weight;
-        }
-
-        // Normalize
-        if (totalWeight > 0) {
-            for (let j = 0; j < 4; j++) {
-                weights[j] /= totalWeight;
-            }
-        } else {
-            indices[0] = 0;
-            weights[0] = 1;
-        }
-
-        skinIndices.push(...indices);
-        skinWeights.push(...weights);
+        skinIndices.push(...idx);
+        skinWeights.push(...wgt);
     }
 
     return { skinIndices, skinWeights };
-}
-
-/**
- * Generate weight preview vertex colors (Phase 3.3)
- * Colors each vertex based on its dominant bone influence
- */
-export function generateWeightPreviewColors(
-    geometry: THREE.BufferGeometry,
-    bones: THREE.Bone[]
-): Float32Array {
-    const skinIndex = geometry.attributes.skinIndex;
-    const skinWeight = geometry.attributes.skinWeight;
-
-    if (!skinIndex || !skinWeight) {
-        return new Float32Array(geometry.attributes.position.count * 3);
-    }
-
-    const colors = new Float32Array(geometry.attributes.position.count * 3);
-
-    for (let i = 0; i < geometry.attributes.position.count; i++) {
-        const color = new THREE.Color(0x333333);
-
-        for (let j = 0; j < 4; j++) {
-            const accessor = j === 0 ? 'getX' : j === 1 ? 'getY' : j === 2 ? 'getZ' : 'getW';
-            const boneIdx = (skinIndex as any)[accessor](i) as number;
-            const weight = (skinWeight as any)[accessor](i) as number;
-
-            if (weight > 0.01 && bones[boneIdx]) {
-                const boneName = bones[boneIdx].name;
-                const boneColor = BONE_COLORS[boneName] || new THREE.Color(0x888888);
-                color.r += boneColor.r * weight;
-                color.g += boneColor.g * weight;
-                color.b += boneColor.b * weight;
-            }
-        }
-
-        colors[i * 3] = Math.min(1, color.r);
-        colors[i * 3 + 1] = Math.min(1, color.g);
-        colors[i * 3 + 2] = Math.min(1, color.b);
-    }
-
-    return colors;
 }
 
 export const createRiggedCharacter = (
@@ -311,8 +317,6 @@ export const createRiggedCharacter = (
 ): { skinnedMesh: THREE.SkinnedMesh; skeleton: THREE.Skeleton } | null => {
 
     const pos = resolveMarkerPositions(markers);
-
-    // Helper to create bone
     const createBone = (name: string, position: THREE.Vector3) => {
         const b = new THREE.Bone();
         b.name = name;
@@ -321,20 +325,13 @@ export const createRiggedCharacter = (
     };
 
     // --- Create Bones in World Space ---
-    // Hierarchy:
-    //   Hips -> Spine -> Spine1 -> Spine2 -> Neck -> Head
-    //   Hips -> LeftUpLeg -> LeftLeg -> LeftFoot -> LeftToeBase
-    //   Hips -> RightUpLeg -> RightLeg -> RightFoot -> RightToeBase
-    //   Spine2 -> LeftShoulder -> LeftArm -> LeftForeArm -> LeftHand
-    //   Spine2 -> RightShoulder -> RightArm -> RightForeArm -> RightHand
-
     const rootBone = createBone('Hips', pos.pelvis);
-
     const spine = createBone('Spine', pos.spine_mid);
     const spine1 = createBone('Spine1', pos.chest);
     const spine2 = createBone('Spine2', pos.spine2Pos);
     const neck = createBone('Neck', pos.neckPos);
     const head = createBone('Head', pos.chin);
+    const headEnd = createBone('Head_End', pos.head);
 
     const l_upLeg = createBone('LeftUpLeg', pos.l_hip_joint);
     const r_upLeg = createBone('RightUpLeg', pos.r_hip_joint);
@@ -357,82 +354,41 @@ export const createRiggedCharacter = (
     const r_hand = createBone('RightHand', pos.r_wrist);
 
     // --- Build Hierarchy & Convert to Local Space ---
-    // Spine chain
-    spine.position.sub(pos.pelvis);
-    rootBone.add(spine);
+    spine.position.sub(pos.pelvis); rootBone.add(spine);
+    spine1.position.sub(pos.spine_mid); spine.add(spine1);
+    spine2.position.sub(pos.chest); spine1.add(spine2);
+    neck.position.sub(pos.spine2Pos); spine2.add(neck);
+    head.position.sub(pos.neckPos); neck.add(head);
+    headEnd.position.sub(pos.chin); head.add(headEnd);
 
-    spine1.position.sub(pos.spine_mid);
-    spine.add(spine1);
+    l_upLeg.position.sub(pos.pelvis); rootBone.add(l_upLeg);
+    l_leg.position.sub(pos.l_hip_joint); l_upLeg.add(l_leg);
+    l_footBone.position.sub(pos.l_knee); l_leg.add(l_footBone);
+    l_toeBone.position.sub(pos.l_ankle); l_footBone.add(l_toeBone);
 
-    spine2.position.sub(pos.chest);
-    spine1.add(spine2);
+    r_upLeg.position.sub(pos.pelvis); rootBone.add(r_upLeg);
+    r_leg.position.sub(pos.r_hip_joint); r_upLeg.add(r_leg);
+    r_footBone.position.sub(pos.r_knee); r_leg.add(r_footBone);
+    r_toeBone.position.sub(pos.r_ankle); r_footBone.add(r_toeBone);
 
-    neck.position.sub(pos.spine2Pos);
-    spine2.add(neck);
+    l_shoulderBone.position.sub(pos.spine2Pos); spine2.add(l_shoulderBone);
+    l_arm.position.sub(pos.l_shoulder); l_shoulderBone.add(l_arm);
+    l_foreArm.position.sub(pos.l_armStart); l_arm.add(l_foreArm);
+    l_hand.position.sub(pos.l_elbow); l_foreArm.add(l_hand);
 
-    head.position.sub(pos.neckPos);
-    neck.add(head);
-
-    // Left Leg
-    l_upLeg.position.sub(pos.pelvis);
-    rootBone.add(l_upLeg);
-
-    l_leg.position.sub(pos.l_hip_joint);
-    l_upLeg.add(l_leg);
-
-    l_footBone.position.sub(pos.l_knee);
-    l_leg.add(l_footBone);
-
-    l_toeBone.position.sub(pos.l_ankle);
-    l_footBone.add(l_toeBone);
-
-    // Right Leg
-    r_upLeg.position.sub(pos.pelvis);
-    rootBone.add(r_upLeg);
-
-    r_leg.position.sub(pos.r_hip_joint);
-    r_upLeg.add(r_leg);
-
-    r_footBone.position.sub(pos.r_knee);
-    r_leg.add(r_footBone);
-
-    r_toeBone.position.sub(pos.r_ankle);
-    r_footBone.add(r_toeBone);
-
-    // Left Arm (attached to Spine2)
-    l_shoulderBone.position.sub(pos.spine2Pos);
-    spine2.add(l_shoulderBone);
-
-    l_arm.position.sub(pos.l_shoulder);
-    l_shoulderBone.add(l_arm);
-
-    l_foreArm.position.sub(pos.l_armStart);
-    l_arm.add(l_foreArm);
-
-    l_hand.position.sub(pos.l_elbow);
-    l_foreArm.add(l_hand);
-
-    // Right Arm (attached to Spine2)
-    r_shoulderBone.position.sub(pos.spine2Pos);
-    spine2.add(r_shoulderBone);
-
-    r_arm.position.sub(pos.r_shoulder);
-    r_shoulderBone.add(r_arm);
-
-    r_foreArm.position.sub(pos.r_armStart);
-    r_arm.add(r_foreArm);
-
-    r_hand.position.sub(pos.r_elbow);
-    r_foreArm.add(r_hand);
+    r_shoulderBone.position.sub(pos.spine2Pos); spine2.add(r_shoulderBone);
+    r_arm.position.sub(pos.r_shoulder); r_shoulderBone.add(r_arm);
+    r_foreArm.position.sub(pos.r_armStart); r_arm.add(r_foreArm);
+    r_hand.position.sub(pos.r_elbow); r_foreArm.add(r_hand);
 
     const bones = [
-        rootBone,                                 // 0: Hips
-        spine, spine1, spine2,                    // 1-3: Spine chain
-        neck, head,                               // 4-5: Head
-        l_upLeg, l_leg, l_footBone, l_toeBone,   // 6-9: Left leg
-        r_upLeg, r_leg, r_footBone, r_toeBone,   // 10-13: Right leg
-        l_shoulderBone, l_arm, l_foreArm, l_hand, // 14-17: Left arm
-        r_shoulderBone, r_arm, r_foreArm, r_hand  // 18-21: Right arm
+        rootBone,
+        spine, spine1, spine2,
+        neck, head, headEnd,
+        l_upLeg, l_leg, l_footBone, l_toeBone,
+        r_upLeg, r_leg, r_footBone, r_toeBone,
+        l_shoulderBone, l_arm, l_foreArm, l_hand,
+        r_shoulderBone, r_arm, r_foreArm, r_hand
     ];
 
     const skeleton = new THREE.Skeleton(bones);
@@ -450,7 +406,6 @@ export const createRiggedCharacter = (
     skinnedMesh.add(rootBone);
     skinnedMesh.bind(skeleton);
 
-    // Copy original transform
     skinnedMesh.position.copy(originalMesh.position);
     skinnedMesh.rotation.copy(originalMesh.rotation);
     skinnedMesh.scale.copy(originalMesh.scale);
@@ -460,7 +415,6 @@ export const createRiggedCharacter = (
 
 /**
  * Compute weight preview colors directly from markers + raw mesh geometry.
- * No SkinnedMesh required — works during rigging mode before skeleton creation.
  */
 export function computeWeightPreviewFromMarkers(
     geometry: THREE.BufferGeometry,
@@ -474,42 +428,30 @@ export function computeWeightPreviewFromMarkers(
     const segments = buildSegments(pos);
     const vertex = new THREE.Vector3();
 
+    // Temps
+    const idx = [0, 0, 0, 0];
+    const wgt = [0, 0, 0, 0];
+    const color = new THREE.Color();
+    const boneColor = new THREE.Color();
+
     for (let i = 0; i < vertexCount; i++) {
         vertex.fromBufferAttribute(positionAttribute, i);
 
-        const boneWeights: { index: number; weight: number }[] = [];
-
-        for (const seg of segments) {
-            const dist = distanceToSegment(vertex, seg.start, seg.end);
-            const normalizedDist = dist / seg.radius;
-            let w = Math.exp(-(normalizedDist * normalizedDist));
-            if (normalizedDist > 1.0) {
-                w *= 1.0 / (1.0 + (normalizedDist - 1.0) * 2.0);
-            }
-            boneWeights.push({ index: seg.boneIndex, weight: w });
-        }
-
-        // Merge weights for same bone index
-        const mergedMap = new Map<number, number>();
-        for (const bw of boneWeights) {
-            mergedMap.set(bw.index, (mergedMap.get(bw.index) || 0) + bw.weight);
-        }
-
-        const merged = Array.from(mergedMap.entries())
-            .map(([index, weight]) => ({ index, weight }))
-            .sort((a, b) => b.weight - a.weight);
-
-        let totalWeight = 0;
-        const top4 = merged.slice(0, 4);
-        for (const t of top4) totalWeight += t.weight;
+        calculateWeightsForVertex(vertex, segments, idx, wgt);
 
         // Blend bone colors
-        const color = new THREE.Color(0x111111);
-        if (totalWeight > 0) {
-            for (const t of top4) {
-                const w = t.weight / totalWeight;
-                const boneName = BONE_NAMES[t.index] || 'Hips';
-                const boneColor = BONE_COLORS[boneName] || new THREE.Color(0x888888);
+        color.setRGB(0.06, 0.06, 0.06); // bg
+
+        for (let j = 0; j < 4; j++) {
+            const w = wgt[j];
+            if (w > 0.01) {
+                const boneIndex = idx[j];
+                const boneName = BONE_NAMES[boneIndex] || 'Hips';
+
+                // Lookup color
+                if (BONE_COLORS[boneName]) boneColor.copy(BONE_COLORS[boneName]);
+                else boneColor.setHex(0x888888);
+
                 color.r += boneColor.r * w;
                 color.g += boneColor.g * w;
                 color.b += boneColor.b * w;

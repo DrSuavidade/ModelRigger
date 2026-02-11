@@ -288,9 +288,14 @@ const SceneContent = () => {
 
   const targetChar = assets.find((a) => a.id === targetCharacterId);
   const sourceChar = assets.find((a) => a.id === sourceAnimationId);
+
   const skeletonRef = useRef<THREE.Object3D>(null);
   const mixerRef = useRef<THREE.AnimationMixer | null>(null);
   const actionRef = useRef<THREE.AnimationAction | null>(null);
+
+  // Source Mixer Refs
+  const sourceMixerRef = useRef<THREE.AnimationMixer | null>(null);
+  const sourceActionRef = useRef<THREE.AnimationAction | null>(null);
 
   // Visibility flags
   const showTarget = viewMode === "target" || viewMode === "both";
@@ -298,11 +303,11 @@ const SceneContent = () => {
 
   // Get the clip to play (priority: activeClip from retargeting, then imported clips)
   const clipToPlay = activeClip || targetChar?.clips?.[0];
+  const sourceClipToPlay = sourceChar?.clips?.[0];
 
-  // Initialize Mixer when target changes
+  // --- TARGET MIXER SETUP ---
   useEffect(() => {
     if (targetChar?.object) {
-      // Cleanup old mixer
       if (mixerRef.current) {
         mixerRef.current.stopAllAction();
         mixerRef.current = null;
@@ -310,14 +315,10 @@ const SceneContent = () => {
 
       mixerRef.current = new THREE.AnimationMixer(targetChar.object);
 
-      // Add listener for finish
-      const cleanup = () => {
-        // remove listener logic if needed
-      };
-
       mixerRef.current.addEventListener("finished", () => {
         if (!useStore.getState().isLooping) {
           setIsPlaying(false);
+          // Optional: reset to start?
         }
       });
 
@@ -327,7 +328,7 @@ const SceneContent = () => {
     }
   }, [targetChar?.object, setIsPlaying]);
 
-  // Handle clip setup
+  // Target Action Init
   useEffect(() => {
     const mixer = mixerRef.current;
     if (mixer && clipToPlay) {
@@ -336,63 +337,127 @@ const SceneContent = () => {
       actionRef.current = action;
 
       setDuration(clipToPlay.duration);
+      action.play();
+    }
+  }, [clipToPlay, targetChar?.object, setDuration]);
 
+  // Target Action Playback Control
+  useEffect(() => {
+    const action = actionRef.current;
+    if (action) {
       action.setLoop(
         isLooping ? THREE.LoopRepeat : THREE.LoopOnce,
         isLooping ? Infinity : 1,
       );
       action.clampWhenFinished = !isLooping;
 
-      action.play();
-      action.paused = !isPlaying;
+      if (isPlaying) {
+        if (mixerRef.current) mixerRef.current.setTime(action.time);
+        action.paused = false;
+      } else {
+        action.paused = true;
+      }
     }
-  }, [clipToPlay, targetChar?.object, isLooping, isPlaying, setDuration]);
+  }, [isLooping, isPlaying]);
+
+  // --- SOURCE MIXER SETUP ---
+  useEffect(() => {
+    if (sourceChar?.object) {
+      if (sourceMixerRef.current) {
+        sourceMixerRef.current.stopAllAction();
+        sourceMixerRef.current = null;
+      }
+      sourceMixerRef.current = new THREE.AnimationMixer(sourceChar.object);
+
+      return () => {
+        if (sourceMixerRef.current) sourceMixerRef.current.stopAllAction();
+      };
+    }
+  }, [sourceChar?.object]);
+
+  // Source Action Init
+  useEffect(() => {
+    const mixer = sourceMixerRef.current;
+    if (mixer && sourceClipToPlay) {
+      mixer.stopAllAction();
+      const action = mixer.clipAction(sourceClipToPlay);
+      sourceActionRef.current = action;
+      action.play();
+    }
+  }, [sourceClipToPlay, sourceChar?.object]);
+
+  // Source Action Playback Control
+  useEffect(() => {
+    const action = sourceActionRef.current;
+    if (action) {
+      action.setLoop(
+        isLooping ? THREE.LoopRepeat : THREE.LoopOnce,
+        isLooping ? Infinity : 1,
+      );
+      action.clampWhenFinished = !isLooping;
+
+      if (isPlaying) {
+        if (sourceMixerRef.current) sourceMixerRef.current.setTime(action.time);
+        action.paused = false;
+      } else {
+        action.paused = true;
+      }
+    }
+  }, [isLooping, isPlaying]);
 
   // Handle timeScale changes
   useEffect(() => {
-    if (mixerRef.current) {
-      mixerRef.current.timeScale = timeScale;
-    }
+    if (mixerRef.current) mixerRef.current.timeScale = timeScale;
+    if (sourceMixerRef.current) sourceMixerRef.current.timeScale = timeScale;
   }, [timeScale]);
 
   // --- OPTIMIZED TIME SYNC ---
   // Subscribe to store changes for seeking WITHOUT causing re-renders
   useEffect(() => {
     const unsub = useStore.subscribe((state, prevState) => {
-      const mixer = mixerRef.current;
-      if (!mixer || !clipToPlay) return;
-
       // Detect seek: if currentTime changed significantly from internal time
       if (state.currentTime !== prevState.currentTime) {
-        const duration = clipToPlay.duration || 1;
-        const mixerTime = mixer.time % duration;
         const storeTime = state.currentTime;
 
-        // Threshold: if difference is > 0.1s, user dragged timeline implies seek
-        // We must be careful not to cycle: update loop sets store -> store triggers sub -> mixer sets time
-        if (Math.abs(storeTime - mixerTime) > 0.1) {
-          mixer.setTime(storeTime);
+        // Seek Target Action
+        const action = actionRef.current;
+        if (action) {
+          action.time = storeTime;
+          if (mixerRef.current && !state.isPlaying) {
+            mixerRef.current.update(0); // Force pose update
+          }
+        }
+
+        // Seek Source Action
+        const sourceAction = sourceActionRef.current;
+        if (sourceAction) {
+          sourceAction.time = storeTime;
+          if (sourceMixerRef.current && !state.isPlaying) {
+            sourceMixerRef.current.update(0);
+          }
         }
       }
     });
     return unsub;
-  }, [clipToPlay]);
+  }, []);
 
   // Animation update loop
   useFrame((state, delta) => {
     const mixer = mixerRef.current;
-    if (mixer && isPlaying) {
-      mixer.update(delta);
+    const sourceMixer = sourceMixerRef.current;
 
-      // Update store's currentTime (for timeline display)
-      const duration = clipToPlay?.duration || 1;
-      const time = mixer.time % duration;
+    if (isPlaying) {
+      if (mixer) mixer.update(delta);
+      if (sourceMixer) sourceMixer.update(delta);
 
-      // Throttle store updates to ~30fps for UI if needed, or just push
-      // Doing it every frame is fine if SceneContent doesn't listen to it.
-      const currentTime = useStore.getState().currentTime;
-      if (Math.abs(time - currentTime) > 0.03) {
-        setCurrentTime(time);
+      // Update store's currentTime from Target
+      if (mixer && clipToPlay) {
+        const duration = clipToPlay?.duration || 1;
+        const time = mixer.time % duration;
+        const currentTime = useStore.getState().currentTime;
+        if (Math.abs(time - currentTime) > 0.03) {
+          setCurrentTime(time);
+        }
       }
     }
   });

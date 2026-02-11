@@ -42,7 +42,8 @@ export type RiggingMarkerName =
   | 'l_elbow' | 'r_elbow'
   | 'l_knee' | 'r_knee'
   | 'l_ankle' | 'r_ankle'
-  | 'l_toe' | 'r_toe';
+  | 'l_toe' | 'r_toe'
+  | 'head';
 
 export interface AppState {
   assets: LoadedAsset[];

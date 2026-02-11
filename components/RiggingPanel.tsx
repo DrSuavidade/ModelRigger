@@ -102,6 +102,7 @@ export const RiggingPanel: React.FC = () => {
         const result = createRiggedCharacter(targetMesh!, riggingMarkers);
         if (result) {
           completeRigging(result.skeleton, result.skinnedMesh);
+          setWeightPreviewMode(false);
           addLog("success", "Rigging complete!");
         }
       } catch (e: any) {

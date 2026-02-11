@@ -51,6 +51,7 @@ export const useStore = create<ExtendedAppState>((set, get) => ({
   riggingMirrorEnabled: true,
   riggingMarkers: {
     chin: [0, 1.7, 0.1],
+    head: [0, 1.8, 0],
     pelvis: [0, 0.9, 0],
     spine_mid: [0, 1.15, 0],
     chest: [0, 1.4, 0],

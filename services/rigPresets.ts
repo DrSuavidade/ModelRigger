@@ -114,6 +114,7 @@ const getDefaultPresets = (): RigPreset[] => [
             r_ankle: [-0.1, 0.08, 0.02],
             l_toe: [0.1, 0.02, 0.12],
             r_toe: [-0.1, 0.02, 0.12],
+            head: [0, 1.8, 0],
         },
     },
     {
@@ -140,6 +141,7 @@ const getDefaultPresets = (): RigPreset[] => [
             r_ankle: [-0.12, 0.08, 0.02],
             l_toe: [0.12, 0.02, 0.14],
             r_toe: [-0.12, 0.02, 0.14],
+            head: [0, 2.05, 0],
         },
     },
     {
@@ -166,6 +168,7 @@ const getDefaultPresets = (): RigPreset[] => [
             r_ankle: [-0.07, 0.05, 0.01],
             l_toe: [0.07, 0.01, 0.08],
             r_toe: [-0.07, 0.01, 0.08],
+            head: [0, 1.25, 0],
         },
     },
     {
@@ -192,6 +195,7 @@ const getDefaultPresets = (): RigPreset[] => [
             r_ankle: [-0.08, 0.04, 0.01],
             l_toe: [0.08, 0.01, 0.06],
             r_toe: [-0.08, 0.01, 0.06],
+            head: [0, 1.05, 0],
         },
     },
     {
@@ -218,6 +222,7 @@ const getDefaultPresets = (): RigPreset[] => [
             r_ankle: [-0.15, 0.08, 0.02],
             l_toe: [0.15, 0.02, 0.14],
             r_toe: [-0.15, 0.02, 0.14],
+            head: [0, 1.9, 0],
         },
     },
 ];
