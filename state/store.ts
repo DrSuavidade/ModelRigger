@@ -68,6 +68,10 @@ export const useStore = create<ExtendedAppState>((set, get) => ({
     r_toe: [-0.1, 0.02, 0.1],
   },
   weightPreviewMode: false,
+  brushSize: 0.5,
+  brushStrength: 0.5,
+  brushMode: 'add',
+  timelineZoom: 1,
 
   // Loading state
   loading: {
@@ -219,5 +223,10 @@ export const useStore = create<ExtendedAppState>((set, get) => ({
       return a;
     });
     return { assets, isRigging: false };
-  })
+  }),
+
+  setBrushSize: (size) => set({ brushSize: Math.max(0.1, Math.min(5, size)) }),
+  setBrushStrength: (strength) => set({ brushStrength: Math.max(0, Math.min(1, strength)) }),
+  setBrushMode: (mode) => set({ brushMode: mode }),
+  setTimelineZoom: (zoom) => set({ timelineZoom: Math.max(0.5, Math.min(5, zoom)) }),
 }));

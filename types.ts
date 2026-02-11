@@ -70,6 +70,12 @@ export interface AppState {
   riggingMirrorEnabled: boolean;
   riggingMarkers: Record<RiggingMarkerName, [number, number, number]>;
   weightPreviewMode: boolean;
+  brushSize: number;
+  brushStrength: number;
+  brushMode: 'add' | 'subtract' | 'smooth';
+
+  // Timeline State
+  timelineZoom: number;
 
   // UI Toggles
   showSkeleton: boolean;
@@ -114,4 +120,8 @@ export interface AppState {
   cancelRigging: () => void;
   setWeightPreviewMode: (enabled: boolean) => void;
   completeRigging: (skeleton: Skeleton, skinnedMesh: Object3D) => void;
+  setBrushSize: (size: number) => void;
+  setBrushStrength: (strength: number) => void;
+  setBrushMode: (mode: 'add' | 'subtract' | 'smooth') => void;
+  setTimelineZoom: (zoom: number) => void;
 }

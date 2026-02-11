@@ -15,7 +15,8 @@ import { RiggingMarkerName } from "../types";
 import { computeWeightPreviewFromMarkers, BONE_COLORS } from "../utils/autoRig";
 
 const RiggingMarkers = () => {
-  const { riggingMarkers, updateRiggingMarker } = useStore();
+  const riggingMarkers = useStore((s) => s.riggingMarkers);
+  const updateRiggingMarker = useStore((s) => s.updateRiggingMarker);
   const [activeMarker, setActiveMarker] = useState<RiggingMarkerName | null>(
     null,
   );
@@ -218,35 +219,78 @@ const WeightPreview = ({
   return <group ref={meshRef} />;
 };
 
+const BrushCursor = ({ object }: { object: THREE.Object3D }) => {
+  const brushSize = useStore((s) => s.brushSize);
+  const cursorRef = useRef<THREE.Mesh>(null);
+  const { raycaster, mouse, camera, scene } = useThree();
+
+  useFrame(() => {
+    if (!cursorRef.current) return;
+
+    // Raycast to find surface point
+    raycaster.setFromCamera(mouse, camera);
+    const intersects = raycaster.intersectObject(object, true);
+
+    if (intersects.length > 0) {
+      const hit = intersects[0];
+      cursorRef.current.visible = true;
+      cursorRef.current.position.copy(hit.point);
+
+      // Orient to surface normal
+      if (hit.face) {
+        const lookAtPos = hit.point
+          .clone()
+          .add(
+            hit.face.normal.clone().transformDirection(hit.object.matrixWorld),
+          );
+        cursorRef.current.lookAt(lookAtPos);
+      }
+    } else {
+      cursorRef.current.visible = false;
+    }
+  });
+
+  return (
+    <mesh ref={cursorRef} visible={false}>
+      <ringGeometry args={[brushSize * 0.9, brushSize, 32]} />
+      <meshBasicMaterial
+        color="#ffffff"
+        transparent
+        opacity={0.5}
+        side={THREE.DoubleSide}
+        depthTest={false}
+      />
+    </mesh>
+  );
+};
+
 const SceneContent = () => {
-  const {
-    assets,
-    targetCharacterId,
-    sourceAnimationId,
-    showSkeleton,
-    showMesh,
-    viewMode,
-    selectedBone,
-    selectBone,
-    isRigging,
-    weightPreviewMode,
-    riggingMarkers,
-    activeClip,
-    isPlaying,
-    isLooping,
-    timeScale,
-    currentTime,
-    setCurrentTime,
-    setIsPlaying,
-    setDuration,
-  } = useStore();
+  // Granular selectors to prevent re-renders on unrelated state changes (like currentTime)
+  const assets = useStore((s) => s.assets);
+  const targetCharacterId = useStore((s) => s.targetCharacterId);
+  const sourceAnimationId = useStore((s) => s.sourceAnimationId);
+  const showSkeleton = useStore((s) => s.showSkeleton);
+  const showMesh = useStore((s) => s.showMesh);
+  const viewMode = useStore((s) => s.viewMode);
+  const isRigging = useStore((s) => s.isRigging);
+  const weightPreviewMode = useStore((s) => s.weightPreviewMode);
+  const riggingMarkers = useStore((s) => s.riggingMarkers);
+  const activeClip = useStore((s) => s.activeClip);
+  const isPlaying = useStore((s) => s.isPlaying);
+  const isLooping = useStore((s) => s.isLooping);
+  const timeScale = useStore((s) => s.timeScale);
+
+  // Actions (stable functions, no re-render)
+  const selectBone = useStore((s) => s.selectBone);
+  const setCurrentTime = useStore((s) => s.setCurrentTime);
+  const setIsPlaying = useStore((s) => s.setIsPlaying);
+  const setDuration = useStore((s) => s.setDuration);
 
   const targetChar = assets.find((a) => a.id === targetCharacterId);
   const sourceChar = assets.find((a) => a.id === sourceAnimationId);
   const skeletonRef = useRef<THREE.Object3D>(null);
   const mixerRef = useRef<THREE.AnimationMixer | null>(null);
   const actionRef = useRef<THREE.AnimationAction | null>(null);
-  const lastUserSeekTime = useRef<number>(-1);
 
   // Visibility flags
   const showTarget = viewMode === "target" || viewMode === "both";
@@ -258,88 +302,51 @@ const SceneContent = () => {
   // Initialize Mixer when target changes
   useEffect(() => {
     if (targetChar?.object) {
+      // Cleanup old mixer
+      if (mixerRef.current) {
+        mixerRef.current.stopAllAction();
+        mixerRef.current = null;
+      }
+
       mixerRef.current = new THREE.AnimationMixer(targetChar.object);
 
       // Add listener for finish
+      const cleanup = () => {
+        // remove listener logic if needed
+      };
+
       mixerRef.current.addEventListener("finished", () => {
         if (!useStore.getState().isLooping) {
           setIsPlaying(false);
         }
       });
-    }
-    return () => {
-      if (mixerRef.current) {
-        mixerRef.current.stopAllAction();
-        mixerRef.current = null;
-      }
-      actionRef.current = null;
-    };
-  }, [targetChar?.object]);
 
-  // Handle clip changes - set up the action
+      return () => {
+        if (mixerRef.current) mixerRef.current.stopAllAction();
+      };
+    }
+  }, [targetChar?.object, setIsPlaying]);
+
+  // Handle clip setup
   useEffect(() => {
     const mixer = mixerRef.current;
     if (mixer && clipToPlay) {
-      // Stop any existing action
       mixer.stopAllAction();
-
-      // Create new action
       const action = mixer.clipAction(clipToPlay);
       actionRef.current = action;
 
-      // Set duration in store
       setDuration(clipToPlay.duration);
 
-      // Configure action
       action.setLoop(
         isLooping ? THREE.LoopRepeat : THREE.LoopOnce,
         isLooping ? Infinity : 1,
       );
       action.clampWhenFinished = !isLooping;
 
-      // Start playing
       action.play();
       action.paused = !isPlaying;
     }
-  }, [clipToPlay, targetChar?.object]);
-
-  // Handle play/pause changes
-  useEffect(() => {
-    const action = actionRef.current;
-    const mixer = mixerRef.current;
-
-    if (action && clipToPlay) {
-      if (isPlaying) {
-        // Check if we're at or near the end of the animation (clamped)
-        const isAtEnd = action.time >= clipToPlay.duration - 0.01;
-        const hasFinished = !action.isRunning() && isAtEnd;
-
-        if (hasFinished && !isLooping) {
-          // Reset to beginning if we finished a non-looping animation
-          action.reset();
-          mixer?.setTime(0);
-          setCurrentTime(0);
-        }
-
-        action.paused = false;
-        action.play();
-      } else {
-        action.paused = true;
-      }
-    }
-  }, [isPlaying, clipToPlay, isLooping]);
-
-  // Handle loop changes
-  useEffect(() => {
-    const action = actionRef.current;
-    if (action && clipToPlay) {
-      action.setLoop(
-        isLooping ? THREE.LoopRepeat : THREE.LoopOnce,
-        isLooping ? Infinity : 1,
-      );
-      action.clampWhenFinished = !isLooping;
-    }
-  }, [isLooping, clipToPlay]);
+  }, [clipToPlay, targetChar?.object, isLooping, isPlaying, setDuration]);
 
   // Handle timeScale changes
   useEffect(() => {
@@ -348,23 +355,28 @@ const SceneContent = () => {
     }
   }, [timeScale]);
 
-  // Handle seeking (when user drags timeline)
+  // --- OPTIMIZED TIME SYNC ---
+  // Subscribe to store changes for seeking WITHOUT causing re-renders
   useEffect(() => {
-    const mixer = mixerRef.current;
-    const action = actionRef.current;
+    const unsub = useStore.subscribe((state, prevState) => {
+      const mixer = mixerRef.current;
+      if (!mixer || !clipToPlay) return;
 
-    // Only seek if the time was set externally (not by our own update)
-    if (mixer && action && clipToPlay) {
-      // Check if this is a user-initiated seek (time changed significantly)
-      const mixerTime = mixer.time % clipToPlay.duration;
-      const timeDiff = Math.abs(currentTime - mixerTime);
+      // Detect seek: if currentTime changed significantly from internal time
+      if (state.currentTime !== prevState.currentTime) {
+        const duration = clipToPlay.duration || 1;
+        const mixerTime = mixer.time % duration;
+        const storeTime = state.currentTime;
 
-      if (timeDiff > 0.1) {
-        // This is a seek operation
-        mixer.setTime(currentTime);
+        // Threshold: if difference is > 0.1s, user dragged timeline implies seek
+        // We must be careful not to cycle: update loop sets store -> store triggers sub -> mixer sets time
+        if (Math.abs(storeTime - mixerTime) > 0.1) {
+          mixer.setTime(storeTime);
+        }
       }
-    }
-  }, [currentTime, clipToPlay]);
+    });
+    return unsub;
+  }, [clipToPlay]);
 
   // Animation update loop
   useFrame((state, delta) => {
@@ -376,8 +388,10 @@ const SceneContent = () => {
       const duration = clipToPlay?.duration || 1;
       const time = mixer.time % duration;
 
-      // Use a ref to avoid triggering seek effect
-      if (Math.abs(time - useStore.getState().currentTime) > 0.016) {
+      // Throttle store updates to ~30fps for UI if needed, or just push
+      // Doing it every frame is fine if SceneContent doesn't listen to it.
+      const currentTime = useStore.getState().currentTime;
+      if (Math.abs(time - currentTime) > 0.03) {
         setCurrentTime(time);
       }
     }
@@ -435,7 +449,10 @@ const SceneContent = () => {
 
       {/* Weight Preview (Phase 3.3) */}
       {weightPreviewMode && targetChar?.object && (
-        <WeightPreview object={targetChar.object} markers={riggingMarkers} />
+        <>
+          <WeightPreview object={targetChar.object} markers={riggingMarkers} />
+          <BrushCursor object={targetChar.object} />
+        </>
       )}
     </>
   );

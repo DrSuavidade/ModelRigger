@@ -30,7 +30,22 @@ let _past: UndoableSnapshot[] = [];
 let _future: UndoableSnapshot[] = [];
 let _listeners: Set<() => void> = new Set();
 
+/** Cached snapshot — useSyncExternalStore requires referential stability */
+let _cachedSnapshot = {
+    canUndo: false,
+    canRedo: false,
+    undoCount: 0,
+    redoCount: 0,
+};
+
 function notify() {
+    // Rebuild cached snapshot only when history actually changes
+    _cachedSnapshot = {
+        canUndo: _past.length > 0,
+        canRedo: _future.length > 0,
+        undoCount: _past.length,
+        redoCount: _future.length,
+    };
     _listeners.forEach((fn) => fn());
 }
 
@@ -40,14 +55,9 @@ export function subscribeHistory(listener: () => void): () => void {
     return () => { _listeners.delete(listener); };
 }
 
-/** Get current history info */
+/** Get current history info (cached — safe for useSyncExternalStore) */
 export function getHistoryState() {
-    return {
-        canUndo: _past.length > 0,
-        canRedo: _future.length > 0,
-        undoCount: _past.length,
-        redoCount: _future.length,
-    };
+    return _cachedSnapshot;
 }
 
 /**

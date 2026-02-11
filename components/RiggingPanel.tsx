@@ -33,6 +33,12 @@ export const RiggingPanel: React.FC = () => {
     weightPreviewMode,
     setWeightPreviewMode,
     pushSnapshot,
+    brushSize,
+    setBrushSize,
+    brushStrength,
+    setBrushStrength,
+    brushMode,
+    setBrushMode,
   } = useStore();
 
   const [showPresetsMenu, setShowPresetsMenu] = useState(false);
@@ -249,6 +255,65 @@ export const RiggingPanel: React.FC = () => {
               </>
             )}
           </Button>
+
+          {weightPreviewMode && (
+            <div className="bg-gray-900/50 p-2 rounded border border-gray-800 space-y-3 mt-2">
+              <div className="text-[10px] text-gray-500 font-mono border-b border-gray-800 pb-1">
+                WEIGHT PAINTING
+              </div>
+
+              {/* Size */}
+              <div>
+                <div className="flex justify-between text-[10px] text-gray-400 mb-1">
+                  <span>SIZE</span>
+                  <span>{brushSize.toFixed(1)}</span>
+                </div>
+                <input
+                  type="range"
+                  min="0.1"
+                  max="5"
+                  step="0.1"
+                  value={brushSize}
+                  onChange={(e) => setBrushSize(parseFloat(e.target.value))}
+                  className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-acid-green"
+                />
+              </div>
+
+              {/* Strength */}
+              <div>
+                <div className="flex justify-between text-[10px] text-gray-400 mb-1">
+                  <span>STRENGTH</span>
+                  <span>{brushStrength.toFixed(1)}</span>
+                </div>
+                <input
+                  type="range"
+                  min="0.1"
+                  max="1"
+                  step="0.1"
+                  value={brushStrength}
+                  onChange={(e) => setBrushStrength(parseFloat(e.target.value))}
+                  className="w-full h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-acid-green"
+                />
+              </div>
+
+              {/* Mode */}
+              <div className="flex gap-1">
+                {(["add", "subtract", "smooth"] as const).map((mode) => (
+                  <button
+                    key={mode}
+                    onClick={() => setBrushMode(mode)}
+                    className={`flex-1 text-[10px] py-1 border rounded transition-colors ${
+                      brushMode === mode
+                        ? "bg-acid-green text-black border-acid-green font-bold"
+                        : "bg-black text-gray-400 border-gray-700 hover:border-gray-500 hover:text-white"
+                    }`}
+                  >
+                    {mode.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           <Button onClick={cancelRigging} variant="danger">
             <X size={16} className="inline mr-2" />
