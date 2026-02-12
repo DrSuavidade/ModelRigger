@@ -280,6 +280,7 @@ self.onmessage = (e: MessageEvent<RetargetMessage>) => {
                 console.log(`[Worker] Final GlobalScale=${globalScale.toFixed(3)}`);
             }
 
+            // --- RETARGET LOOP ---
             const resultData: Record<string, { times: number[]; rotValues: number[]; posValues: number[] }> = {};
             Object.keys(mapping).forEach(tb => {
                 resultData[tb] = { times: [], rotValues: [], posValues: [] };
@@ -288,19 +289,17 @@ self.onmessage = (e: MessageEvent<RetargetMessage>) => {
             // Temps
             const srcRot = new THREE.Quaternion();
             const srcPos = new THREE.Vector3();
-            const srcRestWorld = new THREE.Quaternion();
-            const tgtRestWorld = new THREE.Quaternion();
-            const correction = new THREE.Quaternion();
-            const tgtWorldRot = new THREE.Quaternion();
+            const srcRestQ = new THREE.Quaternion();
+            const tgtRestQ = new THREE.Quaternion();
+            const tgtLocalRot = new THREE.Quaternion();
 
             // Rest Position Caching for Root
             const srcRootBoneName = Object.keys(sourceBoneTracks).find(n => n.includes('Hips') || n.includes('Root') || n.includes('Pelvis'));
             const tgtRootBoneName = Object.keys(mapping).find(n => n.includes('Hips') || n.includes('Root') || n.includes('Pelvis'));
 
             let srcStartPos = new THREE.Vector3();
-            let srcRestPos = new THREE.Vector3(); // Keep for backup
+            let srcRestPos = new THREE.Vector3();
 
-            // Capture Animation Start Position (Frame 0) to use as baseline
             if (srcRootBoneName && sourceBoneTracks[srcRootBoneName]?.pos) {
                 const trk = sourceBoneTracks[srcRootBoneName].pos!;
                 if (trk.values.length >= 3) {
@@ -326,7 +325,10 @@ self.onmessage = (e: MessageEvent<RetargetMessage>) => {
             for (let i = 0; i < numFrames; i++) {
                 const t = i * timeStep;
 
-                // 1. V1 Pass
+                // V1 Pass: local-space retarget with rest correction
+                // Formula: result = tgtRest * srcRestInv * srcRot
+                // Both skeletons use Mixamo Y-oriented convention, so
+                // tgtRest ~ srcRest => correction ~ identity => srcRot transfers directly.
                 Object.keys(mapping).forEach(targetBoneName => {
                     const sourceBoneName = mapping[targetBoneName];
                     if (!sourceBoneName || !sourceBoneTracks[sourceBoneName]) return;
@@ -337,58 +339,45 @@ self.onmessage = (e: MessageEvent<RetargetMessage>) => {
 
                     const hasPos = getTrackValue(srcTrk.pos, t, undefined, srcPos);
 
-                    if (sourceRestRotations[sourceBoneName]) srcRestWorld.fromArray(sourceRestRotations[sourceBoneName]);
-                    else srcRestWorld.identity();
+                    if (sourceRestRotations[sourceBoneName]) srcRestQ.fromArray(sourceRestRotations[sourceBoneName]);
+                    else srcRestQ.identity();
 
-                    if (targetRestRotations[targetBoneName]) tgtRestWorld.fromArray(targetRestRotations[targetBoneName]);
-                    else tgtRestWorld.identity();
+                    if (targetRestRotations[targetBoneName]) tgtRestQ.fromArray(targetRestRotations[targetBoneName]);
+                    else tgtRestQ.identity();
 
-                    correction.copy(srcRestWorld).invert().multiply(tgtRestWorld);
-                    tgtWorldRot.copy(srcRot).multiply(correction);
+                    // tgtRest * srcRestInv * srcRot
+                    tgtLocalRot.copy(tgtRestQ)
+                        .multiply(srcRestQ.clone().invert())
+                        .multiply(srcRot);
 
                     const res = resultData[targetBoneName];
                     res.times.push(t);
 
-                    if (isNaN(tgtWorldRot.x) || isNaN(tgtWorldRot.y) || isNaN(tgtWorldRot.z) || isNaN(tgtWorldRot.w)) tgtWorldRot.identity();
-                    res.rotValues.push(tgtWorldRot.x, tgtWorldRot.y, tgtWorldRot.z, tgtWorldRot.w);
+                    if (isNaN(tgtLocalRot.x) || isNaN(tgtLocalRot.y) || isNaN(tgtLocalRot.z) || isNaN(tgtLocalRot.w)) tgtLocalRot.identity();
+                    res.rotValues.push(tgtLocalRot.x, tgtLocalRot.y, tgtLocalRot.z, tgtLocalRot.w);
 
-                    // Position (Hips Only) - Delta Logic
-                    // Position (Hips Only) - Hybrid Logic
+                    // Position (Hips Only) — hybrid delta/ratio
                     if (hasPos && (targetBoneName === tgtRootBoneName)) {
                         const finalPos = new THREE.Vector3();
+                        finalPos.x = tgtRestPos.x + (srcPos.x - srcStartPos.x) * globalScale;
+                        finalPos.z = tgtRestPos.z + (srcPos.z - srcStartPos.z) * globalScale;
 
-                        // Horizontal (X, Z): Scaled Delta from Start
-                        const deltaX = (srcPos.x - srcStartPos.x) * globalScale;
-                        const deltaZ = (srcPos.z - srcStartPos.z) * globalScale;
-
-                        finalPos.x = tgtRestPos.x + deltaX;
-                        finalPos.z = tgtRestPos.z + deltaZ;
-
-                        // Vertical (Y): Proportional Height if applicable
-                        // If root is high enough (e.g. Hips), use ratio. 
-                        // If root is on floor (e.g. Root bone), use scaled delta.
                         if (Math.abs(srcStartPos.y) > 0.1) {
-                            const ratioY = srcPos.y / srcStartPos.y;
-                            finalPos.y = tgtRestPos.y * ratioY;
+                            finalPos.y = tgtRestPos.y * (srcPos.y / srcStartPos.y);
                         } else {
-                            // Fallback to delta scaling
-                            const deltaY = (srcPos.y - srcStartPos.y) * globalScale;
-                            finalPos.y = tgtRestPos.y + deltaY;
+                            finalPos.y = tgtRestPos.y + (srcPos.y - srcStartPos.y) * globalScale;
                         }
 
-                        // Safety Check
                         if (isNaN(finalPos.x) || isNaN(finalPos.y) || isNaN(finalPos.z)) {
-                            console.warn(`[Worker] NaN Position at frame ${i}`);
                             finalPos.copy(tgtRestPos);
                         }
-
                         res.posValues.push(finalPos.x, finalPos.y, finalPos.z);
                     }
                 });
 
-                // 2. V2 Pass (IK)
+                // V2 Pass (IK)
                 if (mode === 'v2' && vSrc && vTgt) {
-                    // Update Source V-Skel
+                    // Update source virtual skeleton with animation data
                     Object.keys(sourceBoneTracks).forEach(sbName => {
                         const bone = vSrc!.getBone(sbName);
                         if (bone) {
@@ -400,7 +389,7 @@ self.onmessage = (e: MessageEvent<RetargetMessage>) => {
                     });
                     vSrc.updateGlobalPose();
 
-                    // Update Target V-Skel with V1 data
+                    // Update target virtual skeleton with V1 results
                     Object.keys(mapping).forEach(tbName => {
                         const bone = vTgt!.getBone(tbName);
                         if (bone) {
@@ -437,9 +426,6 @@ self.onmessage = (e: MessageEvent<RetargetMessage>) => {
                                 if (sEffectorBone) {
                                     const targetGoal = _tVec1;
                                     sEffectorBone.getWorldPosition(targetGoal);
-
-                                    // Make Goal Relative to Root
-                                    // Goal = TargetRoot + (SourceEffector - SourceRoot) * Scale
                                     targetGoal.sub(srcRootPos).multiplyScalar(globalScale).add(tgtRootPos);
 
                                     const tRoot = vTgt!.getBone(root);
@@ -449,11 +435,10 @@ self.onmessage = (e: MessageEvent<RetargetMessage>) => {
                                     if (tRoot && tMiddle && tEffector) {
                                         solveTwoBoneIK(tRoot, tMiddle, tEffector, targetGoal);
 
-                                        // Write back
                                         const updateRes = (bName: string, q: THREE.Quaternion) => {
                                             const arr = resultData[bName].rotValues;
-                                            const i = arr.length - 4;
-                                            arr[i] = q.x; arr[i + 1] = q.y; arr[i + 2] = q.z; arr[i + 3] = q.w;
+                                            const rIdx = arr.length - 4;
+                                            arr[rIdx] = q.x; arr[rIdx + 1] = q.y; arr[rIdx + 2] = q.z; arr[rIdx + 3] = q.w;
                                         };
                                         updateRes(root, tRoot.quaternion);
                                         updateRes(middle, tMiddle.quaternion);

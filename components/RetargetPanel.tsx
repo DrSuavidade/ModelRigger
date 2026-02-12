@@ -25,9 +25,22 @@ export const RetargetPanel: React.FC = () => {
   const targetAsset = assets.find((a) => a.id === targetCharacterId);
   const sourceAsset = assets.find((a) => a.id === sourceAnimationId);
 
-  // Helper to extract hierarchy for worker
-  const getSkeletonDefinition = (skeleton: THREE.Skeleton) => {
-    return skeleton.bones.map((b) => ({
+  // Helper to snapshot skeleton in its bind/rest pose
+  // Saves the current animated state, calls skeleton.pose() to get the true
+  // bind pose, captures the data, then restores the animated state.
+  const snapshotBindPose = (skeleton: THREE.Skeleton) => {
+    // Save current animated state
+    const savedState = skeleton.bones.map((b) => ({
+      pos: b.position.clone(),
+      quat: b.quaternion.clone(),
+      scale: b.scale.clone(),
+    }));
+
+    // Reset to bind pose (uses boneInverses to compute the true rest)
+    skeleton.pose();
+
+    // Capture bind-pose data
+    const def = skeleton.bones.map((b) => ({
       name: b.name,
       parent:
         b.parent && (b.parent as THREE.Bone).isBone ? b.parent.name : null,
@@ -35,6 +48,20 @@ export const RetargetPanel: React.FC = () => {
       quaternion: b.quaternion.toArray(),
       scale: b.scale.toArray(),
     }));
+
+    const restMap: Record<string, number[]> = {};
+    skeleton.bones.forEach((b) => {
+      restMap[b.name] = b.quaternion.toArray();
+    });
+
+    // Restore animated state
+    skeleton.bones.forEach((b, i) => {
+      b.position.copy(savedState[i].pos);
+      b.quaternion.copy(savedState[i].quat);
+      b.scale.copy(savedState[i].scale);
+    });
+
+    return { def, restMap };
   };
 
   // Helper to detect IK chains
@@ -110,21 +137,16 @@ export const RetargetPanel: React.FC = () => {
       type: t.name.endsWith(".position") ? "vector" : "quaternion",
     }));
 
-    const sourceDef = getSkeletonDefinition(sourceAsset.skeleton);
-    const targetDef = getSkeletonDefinition(targetAsset.skeleton);
+    // Snapshot bind pose for both skeletons (saves/restores animated state)
+    const srcSnapshot = snapshotBindPose(sourceAsset.skeleton);
+    const tgtSnapshot = snapshotBindPose(targetAsset.skeleton);
+
+    const sourceDef = srcSnapshot.def;
+    const targetDef = tgtSnapshot.def;
     const targetChains = findIKChains(targetAsset.skeleton);
 
-    const getRestMap = (skel: THREE.Skeleton | undefined) => {
-      const map: Record<string, number[]> = {};
-      if (!skel) return map;
-      skel.bones.forEach((b) => {
-        map[b.name] = b.quaternion.toArray();
-      });
-      return map;
-    };
-
-    const sourceRest = getRestMap(sourceAsset?.skeleton);
-    const targetRest = getRestMap(targetAsset?.skeleton);
+    const sourceRest = srcSnapshot.restMap;
+    const targetRest = tgtSnapshot.restMap;
 
     setLoading({
       isLoading: true,

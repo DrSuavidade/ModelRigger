@@ -317,79 +317,148 @@ export const createRiggedCharacter = (
 ): { skinnedMesh: THREE.SkinnedMesh; skeleton: THREE.Skeleton } | null => {
 
     const pos = resolveMarkerPositions(markers);
-    const createBone = (name: string, position: THREE.Vector3) => {
-        const b = new THREE.Bone();
-        b.name = name;
-        b.position.copy(position);
-        return b;
+
+    // --- Mixamo-compatible skeleton: Y-axis oriented along bone direction ---
+    // Mixamo orients each bone's local Y-axis from the bone toward its child.
+    // We replicate this so rest quaternions match and retargeting works directly.
+
+    // World positions for each bone (from markers)
+    const wp: Record<string, THREE.Vector3> = {
+        'Hips': pos.pelvis,
+        'Spine': pos.spine_mid,
+        'Spine1': pos.chest,
+        'Spine2': pos.spine2Pos,
+        'Neck': pos.neckPos,
+        'Head': pos.chin,
+        'Head_End': pos.head,
+        'LeftUpLeg': pos.l_hip_joint,
+        'LeftLeg': pos.l_knee,
+        'LeftFoot': pos.l_ankle,
+        'LeftToeBase': pos.l_toe,
+        'RightUpLeg': pos.r_hip_joint,
+        'RightLeg': pos.r_knee,
+        'RightFoot': pos.r_ankle,
+        'RightToeBase': pos.r_toe,
+        'LeftShoulder': pos.l_shoulder,
+        'LeftArm': pos.l_armStart,
+        'LeftForeArm': pos.l_elbow,
+        'LeftHand': pos.l_wrist,
+        'RightShoulder': pos.r_shoulder,
+        'RightArm': pos.r_armStart,
+        'RightForeArm': pos.r_elbow,
+        'RightHand': pos.r_wrist,
     };
 
-    // --- Create Bones in World Space ---
-    const rootBone = createBone('Hips', pos.pelvis);
-    const spine = createBone('Spine', pos.spine_mid);
-    const spine1 = createBone('Spine1', pos.chest);
-    const spine2 = createBone('Spine2', pos.spine2Pos);
-    const neck = createBone('Neck', pos.neckPos);
-    const head = createBone('Head', pos.chin);
-    const headEnd = createBone('Head_End', pos.head);
-
-    const l_upLeg = createBone('LeftUpLeg', pos.l_hip_joint);
-    const r_upLeg = createBone('RightUpLeg', pos.r_hip_joint);
-    const l_leg = createBone('LeftLeg', pos.l_knee);
-    const r_leg = createBone('RightLeg', pos.r_knee);
-    const l_footBone = createBone('LeftFoot', pos.l_ankle);
-    const r_footBone = createBone('RightFoot', pos.r_ankle);
-    const l_toeBone = createBone('LeftToeBase', pos.l_toe);
-    const r_toeBone = createBone('RightToeBase', pos.r_toe);
-
-    const l_shoulderBone = createBone('LeftShoulder', pos.l_shoulder);
-    const r_shoulderBone = createBone('RightShoulder', pos.r_shoulder);
-
-    const l_arm = createBone('LeftArm', pos.l_armStart);
-    const l_foreArm = createBone('LeftForeArm', pos.l_elbow);
-    const l_hand = createBone('LeftHand', pos.l_wrist);
-
-    const r_arm = createBone('RightArm', pos.r_armStart);
-    const r_foreArm = createBone('RightForeArm', pos.r_elbow);
-    const r_hand = createBone('RightHand', pos.r_wrist);
-
-    // --- Build Hierarchy & Convert to Local Space ---
-    spine.position.sub(pos.pelvis); rootBone.add(spine);
-    spine1.position.sub(pos.spine_mid); spine.add(spine1);
-    spine2.position.sub(pos.chest); spine1.add(spine2);
-    neck.position.sub(pos.spine2Pos); spine2.add(neck);
-    head.position.sub(pos.neckPos); neck.add(head);
-    headEnd.position.sub(pos.chin); head.add(headEnd);
-
-    l_upLeg.position.sub(pos.pelvis); rootBone.add(l_upLeg);
-    l_leg.position.sub(pos.l_hip_joint); l_upLeg.add(l_leg);
-    l_footBone.position.sub(pos.l_knee); l_leg.add(l_footBone);
-    l_toeBone.position.sub(pos.l_ankle); l_footBone.add(l_toeBone);
-
-    r_upLeg.position.sub(pos.pelvis); rootBone.add(r_upLeg);
-    r_leg.position.sub(pos.r_hip_joint); r_upLeg.add(r_leg);
-    r_footBone.position.sub(pos.r_knee); r_leg.add(r_footBone);
-    r_toeBone.position.sub(pos.r_ankle); r_footBone.add(r_toeBone);
-
-    l_shoulderBone.position.sub(pos.spine2Pos); spine2.add(l_shoulderBone);
-    l_arm.position.sub(pos.l_shoulder); l_shoulderBone.add(l_arm);
-    l_foreArm.position.sub(pos.l_armStart); l_arm.add(l_foreArm);
-    l_hand.position.sub(pos.l_elbow); l_foreArm.add(l_hand);
-
-    r_shoulderBone.position.sub(pos.spine2Pos); spine2.add(r_shoulderBone);
-    r_arm.position.sub(pos.r_shoulder); r_shoulderBone.add(r_arm);
-    r_foreArm.position.sub(pos.r_armStart); r_arm.add(r_foreArm);
-    r_hand.position.sub(pos.r_elbow); r_foreArm.add(r_hand);
-
-    const bones = [
-        rootBone,
-        spine, spine1, spine2,
-        neck, head, headEnd,
-        l_upLeg, l_leg, l_footBone, l_toeBone,
-        r_upLeg, r_leg, r_footBone, r_toeBone,
-        l_shoulderBone, l_arm, l_foreArm, l_hand,
-        r_shoulderBone, r_arm, r_foreArm, r_hand
+    // Hierarchy: [boneName, parentName, orientTargetBone]
+    // orientTargetBone = which bone to point Y-axis toward (null for end bones)
+    // Order matches BONE_NAMES / buildSegments indices (Head_End last at 22)
+    const hierarchy: [string, string | null, string | null][] = [
+        ['Hips', null, 'Spine'],           // 0
+        ['Spine', 'Hips', 'Spine1'],          // 1
+        ['Spine1', 'Spine', 'Spine2'],          // 2
+        ['Spine2', 'Spine1', 'Neck'],            // 3
+        ['Neck', 'Spine2', 'Head'],            // 4
+        ['Head', 'Neck', 'Head_End'],        // 5
+        ['LeftUpLeg', 'Hips', 'LeftLeg'],         // 6
+        ['LeftLeg', 'LeftUpLeg', 'LeftFoot'],        // 7
+        ['LeftFoot', 'LeftLeg', 'LeftToeBase'],     // 8
+        ['LeftToeBase', 'LeftFoot', null],              // 9
+        ['RightUpLeg', 'Hips', 'RightLeg'],        // 10
+        ['RightLeg', 'RightUpLeg', 'RightFoot'],       // 11
+        ['RightFoot', 'RightLeg', 'RightToeBase'],    // 12
+        ['RightToeBase', 'RightFoot', null],              // 13
+        ['LeftShoulder', 'Spine2', 'LeftArm'],         // 14
+        ['LeftArm', 'LeftShoulder', 'LeftForeArm'],     // 15
+        ['LeftForeArm', 'LeftArm', 'LeftHand'],        // 16
+        ['LeftHand', 'LeftForeArm', null],              // 17
+        ['RightShoulder', 'Spine2', 'RightArm'],        // 18
+        ['RightArm', 'RightShoulder', 'RightForeArm'],    // 19
+        ['RightForeArm', 'RightArm', 'RightHand'],       // 20
+        ['RightHand', 'RightForeArm', null],              // 21
+        ['Head_End', 'Head', null],              // 22
     ];
+
+    // Helper: compute world quaternion that orients Y-axis toward targetPos
+    const orientY = (bonePos: THREE.Vector3, targetPos: THREE.Vector3 | null): THREE.Quaternion => {
+        const q = new THREE.Quaternion();
+        if (!targetPos) return q; // identity for end bones
+        const dir = new THREE.Vector3().subVectors(targetPos, bonePos);
+        if (dir.lengthSq() < 0.0001) return q;
+        dir.normalize();
+        const up = new THREE.Vector3(0, 1, 0);
+        if (Math.abs(up.dot(dir)) > 0.9999) {
+            // Nearly parallel to Y — use axis angle for flip or identity
+            if (dir.y < 0) q.setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI);
+        } else {
+            q.setFromUnitVectors(up, dir);
+        }
+        return q;
+    };
+
+    // Phase 1: Compute absolute world quaternion for each bone
+    const worldQuats: Record<string, THREE.Quaternion> = {};
+    for (const [name, , orientTarget] of hierarchy) {
+        const bonePos = wp[name];
+        if (!bonePos) continue;
+
+        // Determine target position for orientation
+        let targetPos: THREE.Vector3 | null = null;
+        if (orientTarget && wp[orientTarget]) {
+            targetPos = wp[orientTarget];
+        } else if (name === 'LeftToeBase') {
+            targetPos = pos.l_toe.clone().add(new THREE.Vector3(0, 0, 0.15));
+        } else if (name === 'RightToeBase') {
+            targetPos = pos.r_toe.clone().add(new THREE.Vector3(0, 0, 0.15));
+        } else if (name === 'LeftHand') {
+            targetPos = pos.l_wrist.clone().add(new THREE.Vector3(0.15, 0, 0));
+        } else if (name === 'RightHand') {
+            targetPos = pos.r_wrist.clone().add(new THREE.Vector3(-0.15, 0, 0));
+        }
+        // Head_End: no target → identity
+
+        worldQuats[name] = orientY(bonePos, targetPos);
+    }
+
+    // Phase 2: Build hierarchy, converting world transforms to local space
+    const boneMap: Record<string, THREE.Bone> = {};
+    const bones: THREE.Bone[] = [];
+
+    for (const [name, parentName] of hierarchy) {
+        const bone = new THREE.Bone();
+        bone.name = name;
+        const worldPos = wp[name];
+        const worldQuat = worldQuats[name];
+        if (!worldPos || !worldQuat) continue;
+
+        if (parentName && boneMap[parentName]) {
+            const parent = boneMap[parentName];
+            const parentWorldPos = wp[parentName];
+            const parentWorldQuat = worldQuats[parentName];
+
+            // Local position: inverse-rotate (worldPos - parentWorldPos) by parent's world quat
+            const invParentQuat = parentWorldQuat.clone().invert();
+            const localPos = new THREE.Vector3()
+                .subVectors(worldPos, parentWorldPos)
+                .applyQuaternion(invParentQuat);
+
+            // Local quaternion: parentWorldQuat⁻¹ * worldQuat
+            const localQuat = invParentQuat.multiply(worldQuat);
+
+            bone.position.copy(localPos);
+            bone.quaternion.copy(localQuat);
+            parent.add(bone);
+        } else {
+            // Root bone
+            bone.position.copy(worldPos);
+            bone.quaternion.copy(worldQuat);
+        }
+
+        boneMap[name] = bone;
+        bones.push(bone);
+    }
+
+    const rootBone = bones[0];
+    rootBone.updateMatrixWorld(true);
 
     const skeleton = new THREE.Skeleton(bones);
 
