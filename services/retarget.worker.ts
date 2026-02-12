@@ -1,21 +1,29 @@
 /**
- * Retarget Web Worker — proper ES module worker
- * Bundled by Vite with the app's own Three.js version.
+ * Retarget Web Worker
+ *
+ * Transfers animation from a source skeleton to a target skeleton by applying
+ * local-space rest-pose correction per bone:
+ *
+ *   result = tgtRest × srcRest⁻¹ × srcAnim
+ *
+ * Root (Hips) position is transferred using delta scaling:
+ *
+ *   tgtPos = tgtRestPos + (srcPos − srcStartPos) × globalScale
+ *
+ * globalScale is computed from the Hips→Head distance ratio of both skeletons,
+ * which is orientation-independent (works even if the VirtualSkeleton is built
+ * horizontally due to FBX -90° X root rotation in the def).
+ *
+ * V2 mode adds an IK pass after the V1 rotation retarget to correct foot
+ * placement using a CCD-based two-bone IK solver.
  */
 import * as THREE from 'three';
 
-// Signal ready immediately
+// Signal ready
 self.postMessage({ type: 'READY' });
 
-// --- REUSABLE MEMORY POOL ---
-const _tVec1 = new THREE.Vector3();
-const _tVec2 = new THREE.Vector3();
-const _tVec3 = new THREE.Vector3();
-const _tQuat1 = new THREE.Quaternion();
-const _tQuat2 = new THREE.Quaternion();
-const _tQuat3 = new THREE.Quaternion();
+// ─── Types ───────────────────────────────────────────────────────────────────
 
-// --- HELPER TYPES ---
 interface BoneDef {
     name: string;
     parent: string | null;
@@ -34,55 +42,58 @@ interface TrackDef {
 interface RetargetMessage {
     type: 'RETARGET';
     sourceTracks: TrackDef[];
-    mapping: Record<string, string>;
-    sourceRestRotations: Record<string, number[]>;
-    targetRestRotations: Record<string, number[]>;
+    mapping: Record<string, string>;          // targetBone → sourceBone
+    sourceRestRotations: Record<string, number[]>;  // LOCAL rest quaternions
+    targetRestRotations: Record<string, number[]>;  // LOCAL rest quaternions
     mode: 'v1' | 'v2';
     sourceDef: BoneDef[];
     targetDef: BoneDef[];
     targetChains: Record<string, { root: string; middle: string; effector: string }>;
     fps: number;
     duration: number;
-    sourceScale?: number;
-    targetScale?: number;
 }
 
-// --- VIRTUAL SKELETON ---
+// ─── Temp Variables (reused to avoid GC) ─────────────────────────────────────
+
+const _v1 = new THREE.Vector3();
+const _v2 = new THREE.Vector3();
+const _v3 = new THREE.Vector3();
+const _q1 = new THREE.Quaternion();
+const _q2 = new THREE.Quaternion();
+const _q3 = new THREE.Quaternion();
+
+// ─── VirtualSkeleton ─────────────────────────────────────────────────────────
+
 class VirtualSkeleton {
     bones: Record<string, THREE.Bone> = {};
     rootBone: THREE.Bone | null = null;
 
     constructor(boneDefs: BoneDef[]) {
-        // Build bones
+        // Create bones
         boneDefs.forEach(def => {
             const bone = new THREE.Bone();
             bone.name = def.name;
             bone.position.fromArray(def.position);
             bone.quaternion.fromArray(def.quaternion);
             bone.scale.fromArray(def.scale);
-
-            // Store original rest
             bone.userData.restPos = bone.position.clone();
             bone.userData.restRot = bone.quaternion.clone();
-
             this.bones[def.name] = bone;
         });
 
-        // Link parents
+        // Link hierarchy
         boneDefs.forEach(def => {
             const bone = this.bones[def.name];
             if (def.parent && this.bones[def.parent]) {
                 this.bones[def.parent].add(bone);
-            } else {
-                if (!this.rootBone) this.rootBone = bone;
+            } else if (!this.rootBone) {
+                this.rootBone = bone;
             }
         });
     }
 
     updateGlobalPose() {
-        if (this.rootBone) {
-            this.rootBone.updateMatrixWorld(true);
-        }
+        if (this.rootBone) this.rootBone.updateMatrixWorld(true);
     }
 
     getBone(name: string): THREE.Bone | undefined {
@@ -98,7 +109,8 @@ class VirtualSkeleton {
     }
 }
 
-// Simple Two Bone IK Solver using CCD
+// ─── Two-Bone IK Solver (CCD) ───────────────────────────────────────────────
+
 function solveTwoBoneIK(
     root: THREE.Bone,
     middle: THREE.Bone,
@@ -109,36 +121,30 @@ function solveTwoBoneIK(
     const maxIter = 15;
     const tolerance = 0.0001;
 
-    const effectorWorld = _tVec1;
-    const boneWorld = _tVec2;
-    const targetWorld = _tVec3.copy(targetPos);
-
     for (let i = 0; i < maxIter; i++) {
-        effector.getWorldPosition(effectorWorld);
-        if (effectorWorld.distanceTo(targetWorld) < tolerance) break;
+        effector.getWorldPosition(_v1);
+        if (_v1.distanceTo(targetPos) < tolerance) break;
 
-        for (let j = 0; j < chain.length; j++) {
-            const bone = chain[j];
-            bone.getWorldPosition(boneWorld);
-            effector.getWorldPosition(effectorWorld);
+        for (const bone of chain) {
+            bone.getWorldPosition(_v2);
+            effector.getWorldPosition(_v1);
 
-            const toEffector = _tVec1.subVectors(effectorWorld, boneWorld).normalize();
-            const toTarget = _tVec2.subVectors(targetWorld, boneWorld).normalize();
+            const toEffector = _v1.sub(_v2).normalize();
+            const toTarget = _v3.copy(targetPos).sub(_v2).normalize();
 
-            const quat = _tQuat1.setFromUnitVectors(toEffector, toTarget);
+            const rotation = _q1.setFromUnitVectors(toEffector, toTarget);
 
-            // Limit rotation angle per step for stability
-            if (quat.w < 0.9) quat.slerp(_tQuat3.identity(), 0.5);
+            // Dampen large rotations for stability
+            if (rotation.w < 0.9) rotation.slerp(_q3.identity(), 0.5);
 
-            const parent = bone.parent;
-            const parentRot = _tQuat2;
-            if (parent) (parent as THREE.Object3D).getWorldQuaternion(parentRot);
+            const parentRot = _q2;
+            if (bone.parent) (bone.parent as THREE.Object3D).getWorldQuaternion(parentRot);
             else parentRot.identity();
 
-            const boneRot = _tQuat3;
-            bone.getWorldQuaternion(boneRot);
+            const boneWorldRot = _q3;
+            bone.getWorldQuaternion(boneWorldRot);
 
-            const newWorldRot = quat.multiply(boneRot);
+            const newWorldRot = rotation.multiply(boneWorldRot);
             const newLocalRot = parentRot.invert().multiply(newWorldRot);
 
             bone.quaternion.copy(newLocalRot).normalize();
@@ -147,333 +153,338 @@ function solveTwoBoneIK(
     }
 }
 
+// ─── Height Calculation ──────────────────────────────────────────────────────
+
+/**
+ * Computes skeleton "height" as the Hips→Head distance.
+ * This is orientation-independent — it works even if the VirtualSkeleton is
+ * built horizontally (e.g. source def has FBX -90° X world quaternion on root).
+ */
+function getSkeletonHeight(skel: VirtualSkeleton): number {
+    const hipsBone =
+        skel.getBone('Hips') || skel.getBone('mixamorigHips') ||
+        skel.getBone('Root') || skel.getBone('Pelvis');
+    const headBone =
+        skel.getBone('Head_End') || skel.getBone('Head') ||
+        skel.getBone('mixamorigHead') || skel.getBone('mixamorigHead_End') ||
+        skel.getBone('Neck') || skel.getBone('mixamorigNeck');
+
+    if (hipsBone && headBone) {
+        hipsBone.getWorldPosition(_v1);
+        headBone.getWorldPosition(_v2);
+        const dist = _v1.distanceTo(_v2);
+        if (dist > 0.01) return dist;
+    }
+
+    // Fallback: max pairwise distance between any two bones
+    const positions: THREE.Vector3[] = [];
+    Object.values(skel.bones).forEach(b => {
+        const p = new THREE.Vector3();
+        b.getWorldPosition(p);
+        positions.push(p);
+    });
+
+    let maxDist = 0;
+    for (let i = 0; i < positions.length; i++) {
+        for (let j = i + 1; j < positions.length; j++) {
+            const d = positions[i].distanceTo(positions[j]);
+            if (d > maxDist) maxDist = d;
+        }
+    }
+
+    return maxDist > 0.01 ? maxDist : 1.7;
+}
+
+// ─── Track Interpolation ────────────────────────────────────────────────────
+
+/**
+ * Samples a keyframe track at time `t` using linear interpolation.
+ * Writes the result into either `outQuat` (for quaternion tracks, uses slerp)
+ * or `outVec` (for position tracks, uses lerp).
+ * Returns true if the track was sampled successfully.
+ */
+function sampleTrack(
+    track: TrackDef | undefined,
+    t: number,
+    outQuat?: THREE.Quaternion,
+    outVec?: THREE.Vector3
+): boolean {
+    if (!track) return false;
+    const { times, values } = track;
+
+    // Find the keyframe pair surrounding time `t`
+    let idx = 0;
+    while (idx < times.length - 1 && times[idx + 1] < t) idx++;
+
+    const t0 = times[idx];
+    const t1 = times[idx + 1] ?? t0;
+    const alpha = t1 === t0 ? 0 : (t - t0) / (t1 - t0);
+
+    if (outVec) {
+        const i = idx * 3;
+        const j = (idx + 1) * 3;
+        outVec.set(
+            (values[i] as number) + ((values[j] as number) - (values[i] as number)) * alpha,
+            (values[i + 1] as number) + ((values[j + 1] as number) - (values[i + 1] as number)) * alpha,
+            (values[i + 2] as number) + ((values[j + 2] as number) - (values[i + 2] as number)) * alpha,
+        );
+        return true;
+    }
+
+    if (outQuat) {
+        const i = idx * 4;
+        const j = (idx + 1) * 4;
+        _q1.set(values[i] as number, values[i + 1] as number, values[i + 2] as number, values[i + 3] as number);
+        _q2.set(values[j] as number, values[j + 1] as number, values[j + 2] as number, values[j + 3] as number);
+        outQuat.copy(_q1).slerp(_q2, alpha);
+        return true;
+    }
+
+    return false;
+}
+
+// ─── Root Bone Name Detection ────────────────────────────────────────────────
+
+function findRootBoneName(names: string[]): string | undefined {
+    return names.find(n => /Hips|Root|Pelvis/i.test(n));
+}
+
+// ─── Main Message Handler ────────────────────────────────────────────────────
+
 self.onmessage = (e: MessageEvent<RetargetMessage>) => {
     const {
-        type,
-        sourceTracks,
-        mapping,
-        sourceRestRotations,
-        targetRestRotations,
-        mode,
-        sourceDef,
-        targetDef,
-        targetChains,
-        fps,
-        duration
+        type, sourceTracks, mapping,
+        sourceRestRotations, targetRestRotations,
+        mode, sourceDef, targetDef, targetChains,
+        fps, duration,
     } = e.data;
 
-    if (type === 'RETARGET') {
-        try {
-            const tracks: any[] = [];
-            const numFrames = Math.floor(duration * fps);
-            const timeStep = 1 / fps;
+    if (type !== 'RETARGET') return;
 
-            // Group source tracks
-            const sourceBoneTracks: Record<string, { pos?: TrackDef; quat?: TrackDef }> = {};
-            sourceTracks.forEach(t => {
-                const isPos = t.name.endsWith('.position');
-                const boneName = t.name.replace(isPos ? '.position' : '.quaternion', '');
-                if (!sourceBoneTracks[boneName]) sourceBoneTracks[boneName] = {};
-                sourceBoneTracks[boneName][isPos ? 'pos' : 'quat'] = t;
-            });
+    try {
+        const numFrames = Math.floor(duration * fps);
+        const timeStep = 1 / fps;
 
-            // Optimized Interpolation
-            const getTrackValue = (
-                track: TrackDef | undefined,
-                t: number,
-                targetQuat?: THREE.Quaternion,
-                targetVec?: THREE.Vector3
-            ): boolean => {
-                if (!track) return false;
-                const { times, values } = track;
+        // ── Group source tracks by bone name ──────────────────────────────
+        const sourceBoneTracks: Record<string, { pos?: TrackDef; quat?: TrackDef }> = {};
+        sourceTracks.forEach(t => {
+            const isPos = t.name.endsWith('.position');
+            const boneName = t.name.replace(isPos ? '.position' : '.quaternion', '');
+            if (!sourceBoneTracks[boneName]) sourceBoneTracks[boneName] = {};
+            sourceBoneTracks[boneName][isPos ? 'pos' : 'quat'] = t;
+        });
 
-                let idx = 0;
-                while (idx < times.length - 1 && times[idx + 1] < t) idx++;
+        // ── Build VirtualSkeletons & compute globalScale ──────────────────
+        let vSrc: VirtualSkeleton | null = null;
+        let vTgt: VirtualSkeleton | null = null;
+        let globalScale = 1.0;
 
-                const t0 = times[idx];
-                const t1 = times[idx + 1] || t0;
-                const alpha = (t1 === t0) ? 0 : (t - t0) / (t1 - t0);
+        if (sourceDef && targetDef) {
+            vSrc = new VirtualSkeleton(sourceDef);
+            vTgt = new VirtualSkeleton(targetDef);
+            vSrc.resetPose(); vSrc.updateGlobalPose();
+            vTgt.resetPose(); vTgt.updateGlobalPose();
 
-                if (targetVec) {
-                    const i3 = idx * 3;
-                    const i3next = (idx + 1) * 3;
-                    const v0x = values[i3], v0y = values[i3 + 1], v0z = values[i3 + 2];
-                    const v1x = values[i3next], v1y = values[i3next + 1], v1z = values[i3next + 2];
+            const srcH = getSkeletonHeight(vSrc);
+            const tgtH = getSkeletonHeight(vTgt);
 
-                    targetVec.x = v0x as number + ((v1x as number) - (v0x as number)) * alpha;
-                    targetVec.y = v0y as number + ((v1y as number) - (v0y as number)) * alpha;
-                    targetVec.z = v0z as number + ((v1z as number) - (v0z as number)) * alpha;
-                    return true;
+            console.log(`[Retarget] Hips→Head: src=${srcH.toFixed(3)}, tgt=${tgtH.toFixed(3)}`);
+
+            if (srcH > 0.001 && tgtH > 0.001) {
+                globalScale = tgtH / srcH;
+            }
+            if (!Number.isFinite(globalScale) || globalScale < 0.0001 || globalScale > 10000) {
+                console.warn(`[Retarget] Invalid globalScale (${globalScale}), defaulting to 1.0`);
+                globalScale = 1.0;
+            }
+
+            console.log(`[Retarget] globalScale=${globalScale.toFixed(4)}`);
+        }
+
+        // ── Identify root bone names ──────────────────────────────────────
+        const srcRootName = findRootBoneName(Object.keys(sourceBoneTracks));
+        const tgtRootName = findRootBoneName(Object.keys(mapping));
+
+        // ── Cache root rest positions ─────────────────────────────────────
+        // srcStartPos: first frame of source animation (for computing deltas)
+        // tgtRestPos:  target skeleton rest position (base for output)
+        const srcStartPos = new THREE.Vector3();
+        const tgtRestPos = new THREE.Vector3();
+
+        if (srcRootName && sourceBoneTracks[srcRootName]?.pos) {
+            const v = sourceBoneTracks[srcRootName].pos!.values;
+            if (v.length >= 3) srcStartPos.set(v[0] as number, v[1] as number, v[2] as number);
+        }
+
+        if (vTgt && tgtRootName) {
+            const b = vTgt.getBone(tgtRootName);
+            if (b) tgtRestPos.copy(b.userData.restPos);
+        }
+
+        // ── Prepare result buffers ────────────────────────────────────────
+        const resultData: Record<string, {
+            times: number[];
+            rotValues: number[];
+            posValues: number[];
+        }> = {};
+        for (const tb of Object.keys(mapping)) {
+            resultData[tb] = { times: [], rotValues: [], posValues: [] };
+        }
+
+        // ── Per-frame temps ───────────────────────────────────────────────
+        const srcRot = new THREE.Quaternion();
+        const srcPos = new THREE.Vector3();
+        const srcRestQ = new THREE.Quaternion();
+        const tgtRestQ = new THREE.Quaternion();
+        const outRot = new THREE.Quaternion();
+
+        // ── Main frame loop ───────────────────────────────────────────────
+        for (let i = 0; i < numFrames; i++) {
+            const t = i * timeStep;
+
+            // ─── V1 Pass: local-space retarget ────────────────────────────
+            for (const targetBone of Object.keys(mapping)) {
+                const sourceBone = mapping[targetBone];
+                if (!sourceBone || !sourceBoneTracks[sourceBone]) continue;
+
+                const srcTrk = sourceBoneTracks[sourceBone];
+                const res = resultData[targetBone];
+                res.times.push(t);
+
+                // Rotation: tgtRest × srcRest⁻¹ × srcAnim
+                const hasRot = sampleTrack(srcTrk.quat, t, srcRot);
+                if (!hasRot) srcRot.identity();
+
+                if (sourceRestRotations[sourceBone]) srcRestQ.fromArray(sourceRestRotations[sourceBone]);
+                else srcRestQ.identity();
+
+                if (targetRestRotations[targetBone]) tgtRestQ.fromArray(targetRestRotations[targetBone]);
+                else tgtRestQ.identity();
+
+                outRot.copy(tgtRestQ)
+                    .multiply(srcRestQ.clone().invert())
+                    .multiply(srcRot);
+
+                if (isNaN(outRot.x) || isNaN(outRot.y) || isNaN(outRot.z) || isNaN(outRot.w)) {
+                    outRot.identity();
                 }
-                if (targetQuat) {
-                    const i4 = idx * 4;
-                    const i4next = (idx + 1) * 4;
-                    const q0 = _tQuat1.set(values[i4] as number, values[i4 + 1] as number, values[i4 + 2] as number, values[i4 + 3] as number);
-                    const q1 = _tQuat2.set(values[i4next] as number, values[i4next + 1] as number, values[i4next + 2] as number, values[i4next + 3] as number);
-                    targetQuat.copy(q0).slerp(q1, alpha);
-                    return true;
+                res.rotValues.push(outRot.x, outRot.y, outRot.z, outRot.w);
+
+                // Position (root bone only): delta scaling
+                const hasPos = sampleTrack(srcTrk.pos, t, undefined, srcPos);
+                if (hasPos && targetBone === tgtRootName) {
+                    const fx = tgtRestPos.x + (srcPos.x - srcStartPos.x) * globalScale;
+                    const fy = tgtRestPos.y + (srcPos.y - srcStartPos.y) * globalScale;
+                    const fz = tgtRestPos.z + (srcPos.z - srcStartPos.z) * globalScale;
+
+                    res.posValues.push(
+                        isNaN(fx) ? tgtRestPos.x : fx,
+                        isNaN(fy) ? tgtRestPos.y : fy,
+                        isNaN(fz) ? tgtRestPos.z : fz,
+                    );
                 }
-                return false;
-            };
+            }
 
-            // --- SCALE CALCULATION (ALL MODES) ---
-            let vSrc: VirtualSkeleton | null = null;
-            let vTgt: VirtualSkeleton | null = null;
-            let globalScale = 1.0;
-
-            // Always calculate scale if defs available
-            if (sourceDef && targetDef) {
-                vSrc = new VirtualSkeleton(sourceDef);
-                vTgt = new VirtualSkeleton(targetDef);
-
-                vSrc.resetPose();
+            // ─── V2 Pass: IK correction ──────────────────────────────────
+            if (mode === 'v2' && vSrc && vTgt) {
+                // Pose source VirtualSkeleton to current animation frame
+                for (const sbName of Object.keys(sourceBoneTracks)) {
+                    const bone = vSrc.getBone(sbName);
+                    if (!bone) continue;
+                    if (sampleTrack(sourceBoneTracks[sbName].quat, t, _q1)) bone.quaternion.copy(_q1);
+                    if (sampleTrack(sourceBoneTracks[sbName].pos, t, undefined, _v1)) {
+                        if (!isNaN(_v1.x)) bone.position.copy(_v1);
+                    }
+                }
                 vSrc.updateGlobalPose();
-                vTgt.resetPose();
+
+                // Pose target VirtualSkeleton to V1 results
+                for (const tbName of Object.keys(mapping)) {
+                    const bone = vTgt.getBone(tbName);
+                    if (!bone) continue;
+                    const res = resultData[tbName];
+
+                    const rIdx = res.rotValues.length - 4;
+                    if (rIdx >= 0) {
+                        bone.quaternion.set(
+                            res.rotValues[rIdx], res.rotValues[rIdx + 1],
+                            res.rotValues[rIdx + 2], res.rotValues[rIdx + 3],
+                        );
+                    }
+                    const pIdx = res.posValues.length - 3;
+                    if (pIdx >= 0 && !isNaN(res.posValues[pIdx])) {
+                        bone.position.set(res.posValues[pIdx], res.posValues[pIdx + 1], res.posValues[pIdx + 2]);
+                    }
+                }
                 vTgt.updateGlobalPose();
 
-                // Robust Height Calculation
-                const getSkeletonHeight = (skel: VirtualSkeleton): number => {
-                    // Start with known head bones
-                    let topBone = skel.getBone('Head_End') || skel.getBone('Head') || skel.getBone('mixamorigHead') || skel.getBone('Neck');
+                // Solve IK chains
+                const srcRootBone = srcRootName ? vSrc.getBone(srcRootName) : undefined;
+                const tgtRootBone = tgtRootName ? vTgt.getBone(tgtRootName) : undefined;
 
-                    if (topBone) {
-                        const pos = _tVec1;
-                        topBone.getWorldPosition(pos);
-                        if (Math.abs(pos.y) > 0.05) return Math.abs(pos.y);
-                    }
+                if (targetChains && srcRootBone && tgtRootBone) {
+                    srcRootBone.getWorldPosition(_v2);
+                    tgtRootBone.getWorldPosition(_v3);
 
-                    // Fallback: Scan all bones for max Y
-                    let maxY = 0;
-                    Object.values(skel.bones).forEach(b => {
-                        const pos = _tVec1;
-                        b.getWorldPosition(pos);
-                        if (pos.y > maxY) maxY = pos.y;
-                    });
+                    for (const chainName of Object.keys(targetChains)) {
+                        const { root, middle, effector } = targetChains[chainName];
+                        const srcEffectorName = mapping[effector];
+                        if (!mapping[root] || !srcEffectorName) continue;
 
-                    // Sanity check: if max Y is still ~0, maybe Z-up?
-                    if (maxY < 0.05) {
-                        Object.values(skel.bones).forEach(b => {
-                            const pos = _tVec1;
-                            b.getWorldPosition(pos);
-                            if (pos.z > maxY) maxY = pos.z;
-                        });
-                    }
+                        const sEffBone = vSrc.getBone(srcEffectorName);
+                        if (!sEffBone) continue;
 
-                    return maxY > 0.05 ? maxY : 1.7; // Default 1.7m if fail
-                };
+                        // Scale source effector world position into target space
+                        sEffBone.getWorldPosition(_v1);
+                        _v1.sub(_v2).multiplyScalar(globalScale).add(_v3);
 
-                const srcH = getSkeletonHeight(vSrc);
-                const tgtH = getSkeletonHeight(vTgt);
+                        const tRoot = vTgt.getBone(root);
+                        const tMiddle = vTgt.getBone(middle);
+                        const tEffector = vTgt.getBone(effector);
 
-                // Log scale for debugging
-                console.log(`[Worker] Scale: SourceH=${srcH.toFixed(3)}, TargetH=${tgtH.toFixed(3)}`);
+                        if (tRoot && tMiddle && tEffector) {
+                            solveTwoBoneIK(tRoot, tMiddle, tEffector, _v1);
 
-                if (srcH > 0.001 && tgtH > 0.001) {
-                    globalScale = tgtH / srcH;
-                }
-
-                // Safety cleanup
-                if (!Number.isFinite(globalScale) || isNaN(globalScale) || globalScale < 0.0001 || globalScale > 10000) {
-                    console.warn(`[Worker] Invalid globalScale computed (${globalScale}). Defaulting to 1.0.`);
-                    globalScale = 1.0;
-                }
-                console.log(`[Worker] Final GlobalScale=${globalScale.toFixed(3)}`);
-            }
-
-            // --- RETARGET LOOP ---
-            const resultData: Record<string, { times: number[]; rotValues: number[]; posValues: number[] }> = {};
-            Object.keys(mapping).forEach(tb => {
-                resultData[tb] = { times: [], rotValues: [], posValues: [] };
-            });
-
-            // Temps
-            const srcRot = new THREE.Quaternion();
-            const srcPos = new THREE.Vector3();
-            const srcRestQ = new THREE.Quaternion();
-            const tgtRestQ = new THREE.Quaternion();
-            const tgtLocalRot = new THREE.Quaternion();
-
-            // Rest Position Caching for Root
-            const srcRootBoneName = Object.keys(sourceBoneTracks).find(n => n.includes('Hips') || n.includes('Root') || n.includes('Pelvis'));
-            const tgtRootBoneName = Object.keys(mapping).find(n => n.includes('Hips') || n.includes('Root') || n.includes('Pelvis'));
-
-            let srcStartPos = new THREE.Vector3();
-            let srcRestPos = new THREE.Vector3();
-
-            if (srcRootBoneName && sourceBoneTracks[srcRootBoneName]?.pos) {
-                const trk = sourceBoneTracks[srcRootBoneName].pos!;
-                if (trk.values.length >= 3) {
-                    srcStartPos.set(trk.values[0] as number, trk.values[1] as number, trk.values[2] as number);
-                    console.log(`[Worker] Source Anim Start Pos: ${srcStartPos.toArray()}`);
-                }
-            } else if (vSrc && srcRootBoneName) {
-                const b = vSrc.getBone(srcRootBoneName);
-                if (b) srcStartPos.copy(b.userData.restPos);
-            }
-
-            if (vSrc && srcRootBoneName) {
-                const b = vSrc.getBone(srcRootBoneName);
-                if (b) srcRestPos.copy(b.userData.restPos);
-            }
-
-            let tgtRestPos = new THREE.Vector3();
-            if (vTgt && tgtRootBoneName) {
-                const b = vTgt.getBone(tgtRootBoneName);
-                if (b) tgtRestPos.copy(b.userData.restPos);
-            }
-
-            for (let i = 0; i < numFrames; i++) {
-                const t = i * timeStep;
-
-                // V1 Pass: local-space retarget with rest correction
-                // Formula: result = tgtRest * srcRestInv * srcRot
-                // Both skeletons use Mixamo Y-oriented convention, so
-                // tgtRest ~ srcRest => correction ~ identity => srcRot transfers directly.
-                Object.keys(mapping).forEach(targetBoneName => {
-                    const sourceBoneName = mapping[targetBoneName];
-                    if (!sourceBoneName || !sourceBoneTracks[sourceBoneName]) return;
-
-                    const srcTrk = sourceBoneTracks[sourceBoneName];
-                    const hasRot = getTrackValue(srcTrk.quat, t, srcRot);
-                    if (!hasRot) srcRot.identity();
-
-                    const hasPos = getTrackValue(srcTrk.pos, t, undefined, srcPos);
-
-                    if (sourceRestRotations[sourceBoneName]) srcRestQ.fromArray(sourceRestRotations[sourceBoneName]);
-                    else srcRestQ.identity();
-
-                    if (targetRestRotations[targetBoneName]) tgtRestQ.fromArray(targetRestRotations[targetBoneName]);
-                    else tgtRestQ.identity();
-
-                    // tgtRest * srcRestInv * srcRot
-                    tgtLocalRot.copy(tgtRestQ)
-                        .multiply(srcRestQ.clone().invert())
-                        .multiply(srcRot);
-
-                    const res = resultData[targetBoneName];
-                    res.times.push(t);
-
-                    if (isNaN(tgtLocalRot.x) || isNaN(tgtLocalRot.y) || isNaN(tgtLocalRot.z) || isNaN(tgtLocalRot.w)) tgtLocalRot.identity();
-                    res.rotValues.push(tgtLocalRot.x, tgtLocalRot.y, tgtLocalRot.z, tgtLocalRot.w);
-
-                    // Position (Hips Only) — hybrid delta/ratio
-                    if (hasPos && (targetBoneName === tgtRootBoneName)) {
-                        const finalPos = new THREE.Vector3();
-                        finalPos.x = tgtRestPos.x + (srcPos.x - srcStartPos.x) * globalScale;
-                        finalPos.z = tgtRestPos.z + (srcPos.z - srcStartPos.z) * globalScale;
-
-                        if (Math.abs(srcStartPos.y) > 0.1) {
-                            finalPos.y = tgtRestPos.y * (srcPos.y / srcStartPos.y);
-                        } else {
-                            finalPos.y = tgtRestPos.y + (srcPos.y - srcStartPos.y) * globalScale;
+                            // Write IK results back into the output
+                            const writeBack = (bName: string, q: THREE.Quaternion) => {
+                                const arr = resultData[bName].rotValues;
+                                const idx = arr.length - 4;
+                                arr[idx] = q.x; arr[idx + 1] = q.y;
+                                arr[idx + 2] = q.z; arr[idx + 3] = q.w;
+                            };
+                            writeBack(root, tRoot.quaternion);
+                            writeBack(middle, tMiddle.quaternion);
                         }
-
-                        if (isNaN(finalPos.x) || isNaN(finalPos.y) || isNaN(finalPos.z)) {
-                            finalPos.copy(tgtRestPos);
-                        }
-                        res.posValues.push(finalPos.x, finalPos.y, finalPos.z);
-                    }
-                });
-
-                // V2 Pass (IK)
-                if (mode === 'v2' && vSrc && vTgt) {
-                    // Update source virtual skeleton with animation data
-                    Object.keys(sourceBoneTracks).forEach(sbName => {
-                        const bone = vSrc!.getBone(sbName);
-                        if (bone) {
-                            if (getTrackValue(sourceBoneTracks[sbName].quat, t, _tQuat1)) bone.quaternion.copy(_tQuat1);
-                            if (getTrackValue(sourceBoneTracks[sbName].pos, t, undefined, _tVec1)) {
-                                if (!isNaN(_tVec1.x)) bone.position.copy(_tVec1);
-                            }
-                        }
-                    });
-                    vSrc.updateGlobalPose();
-
-                    // Update target virtual skeleton with V1 results
-                    Object.keys(mapping).forEach(tbName => {
-                        const bone = vTgt!.getBone(tbName);
-                        if (bone) {
-                            const res = resultData[tbName];
-                            const idx = res.rotValues.length - 4;
-                            if (idx >= 0) {
-                                bone.quaternion.set(res.rotValues[idx], res.rotValues[idx + 1], res.rotValues[idx + 2], res.rotValues[idx + 3]);
-                            }
-                            if (res.posValues.length >= 3) {
-                                const pIdx = res.posValues.length - 3;
-                                const px = res.posValues[pIdx], py = res.posValues[pIdx + 1], pz = res.posValues[pIdx + 2];
-                                if (!isNaN(px)) bone.position.set(px, py, pz);
-                            }
-                        }
-                    });
-                    vTgt.updateGlobalPose();
-
-                    // IK
-                    const srcRootBone = vSrc.getBone(srcRootBoneName || '');
-                    const tgtRootBone = vTgt.getBone(tgtRootBoneName || '');
-
-                    if (targetChains && srcRootBone && tgtRootBone) {
-                        const srcRootPos = _tVec2;
-                        const tgtRootPos = _tVec3;
-                        srcRootBone.getWorldPosition(srcRootPos);
-                        tgtRootBone.getWorldPosition(tgtRootPos);
-
-                        Object.keys(targetChains).forEach(chainName => {
-                            const { root, middle, effector } = targetChains[chainName];
-                            const srcEffector = mapping[effector];
-
-                            if (mapping[root] && srcEffector) {
-                                const sEffectorBone = vSrc!.getBone(srcEffector);
-                                if (sEffectorBone) {
-                                    const targetGoal = _tVec1;
-                                    sEffectorBone.getWorldPosition(targetGoal);
-                                    targetGoal.sub(srcRootPos).multiplyScalar(globalScale).add(tgtRootPos);
-
-                                    const tRoot = vTgt!.getBone(root);
-                                    const tMiddle = vTgt!.getBone(middle);
-                                    const tEffector = vTgt!.getBone(effector);
-
-                                    if (tRoot && tMiddle && tEffector) {
-                                        solveTwoBoneIK(tRoot, tMiddle, tEffector, targetGoal);
-
-                                        const updateRes = (bName: string, q: THREE.Quaternion) => {
-                                            const arr = resultData[bName].rotValues;
-                                            const rIdx = arr.length - 4;
-                                            arr[rIdx] = q.x; arr[rIdx + 1] = q.y; arr[rIdx + 2] = q.z; arr[rIdx + 3] = q.w;
-                                        };
-                                        updateRes(root, tRoot.quaternion);
-                                        updateRes(middle, tMiddle.quaternion);
-                                    }
-                                }
-                            }
-                        });
                     }
                 }
             }
-
-            // Convert Results
-            Object.keys(resultData).forEach(name => {
-                const d = resultData[name];
-                if (d.times.length > 0) {
-                    tracks.push({
-                        name: name,
-                        type: 'quaternion',
-                        times: new Float32Array(d.times),
-                        values: new Float32Array(d.rotValues)
-                    });
-                    if (d.posValues.length > 0) {
-                        tracks.push({
-                            name: name,
-                            type: 'vector',
-                            times: new Float32Array(d.times),
-                            values: new Float32Array(d.posValues)
-                        });
-                    }
-                }
-            });
-
-            self.postMessage({ type: 'SUCCESS', tracks });
-        } catch (err: any) {
-            self.postMessage({ type: 'ERROR', message: err.message + "\n" + err.stack });
         }
+
+        // ── Build output tracks ───────────────────────────────────────────
+        const tracks: any[] = [];
+        for (const name of Object.keys(resultData)) {
+            const d = resultData[name];
+            if (d.times.length === 0) continue;
+
+            tracks.push({
+                name,
+                type: 'quaternion',
+                times: new Float32Array(d.times),
+                values: new Float32Array(d.rotValues),
+            });
+
+            if (d.posValues.length > 0) {
+                tracks.push({
+                    name,
+                    type: 'vector',
+                    times: new Float32Array(d.times),
+                    values: new Float32Array(d.posValues),
+                });
+            }
+        }
+
+        self.postMessage({ type: 'SUCCESS', tracks });
+    } catch (err: any) {
+        self.postMessage({ type: 'ERROR', message: err.message + '\n' + err.stack });
     }
 };

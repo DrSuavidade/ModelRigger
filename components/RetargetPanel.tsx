@@ -25,9 +25,21 @@ export const RetargetPanel: React.FC = () => {
   const targetAsset = assets.find((a) => a.id === targetCharacterId);
   const sourceAsset = assets.find((a) => a.id === sourceAnimationId);
 
-  // Helper to snapshot skeleton in its bind/rest pose
-  // Saves the current animated state, calls skeleton.pose() to get the true
-  // bind pose, captures the data, then restores the animated state.
+  // ── Bind-Pose Snapshot ───────────────────────────────────────────────────
+  //
+  // Captures the skeleton's true bind/rest pose.
+  //
+  // Returns two things:
+  //   - def:     Bone structure (positions + quaternions) as produced by
+  //              skeleton.pose(). Root bones get WORLD transforms; child bones
+  //              get LOCAL transforms. This feeds the worker's VirtualSkeleton
+  //              for height calculation and IK.
+  //   - restMap: Per-bone LOCAL rest quaternions for the retarget formula.
+  //              For root bones, the non-bone parent's world rotation is
+  //              stripped so the rest matches the animation track's coordinate
+  //              space (FBX loader's Z→Y conversion lives on the parent, not
+  //              in the animation data).
+  //
   const snapshotBindPose = (skeleton: THREE.Skeleton) => {
     // Save current animated state
     const savedState = skeleton.bones.map((b) => ({
@@ -36,10 +48,10 @@ export const RetargetPanel: React.FC = () => {
       scale: b.scale.clone(),
     }));
 
-    // Reset to bind pose (uses boneInverses to compute the true rest)
+    // Reset to true bind pose via boneInverses
     skeleton.pose();
 
-    // Capture bind-pose data
+    // Skeleton definition — preserved as-is from skeleton.pose()
     const def = skeleton.bones.map((b) => ({
       name: b.name,
       parent:
@@ -49,12 +61,27 @@ export const RetargetPanel: React.FC = () => {
       scale: b.scale.toArray(),
     }));
 
+    // Rest rotation map — LOCAL quaternions for every bone
     const restMap: Record<string, number[]> = {};
     skeleton.bones.forEach((b) => {
-      restMap[b.name] = b.quaternion.toArray();
+      if (b.parent && !(b.parent as THREE.Bone).isBone) {
+        // Root bone: skeleton.pose() gives WORLD quaternion (includes the
+        // non-bone parent's rotation, e.g. FBX -90° X). Animation tracks
+        // store LOCAL quaternions. Strip the parent rotation to match.
+        const parentWorldQuat = new THREE.Quaternion();
+        b.parent.updateWorldMatrix(true, false);
+        b.parent.getWorldQuaternion(parentWorldQuat);
+        const localQuat = parentWorldQuat
+          .invert()
+          .multiply(b.quaternion.clone());
+        restMap[b.name] = localQuat.toArray();
+      } else {
+        // Child bone: skeleton.pose() already gives LOCAL quaternion
+        restMap[b.name] = b.quaternion.toArray();
+      }
     });
 
-    // Restore animated state
+    // Restore animated state so the scene isn't visually disrupted
     skeleton.bones.forEach((b, i) => {
       b.position.copy(savedState[i].pos);
       b.quaternion.copy(savedState[i].quat);
@@ -64,7 +91,8 @@ export const RetargetPanel: React.FC = () => {
     return { def, restMap };
   };
 
-  // Helper to detect IK chains
+  // ── IK Chain Detection ───────────────────────────────────────────────────
+
   const findIKChains = (skeleton: THREE.Skeleton) => {
     const chains: Record<
       string,
@@ -98,20 +126,21 @@ export const RetargetPanel: React.FC = () => {
         root: rFoot.parent!.parent!.name,
       };
     }
+
     return chains;
   };
+
+  // ── Run Retarget ─────────────────────────────────────────────────────────
 
   const runRetarget = async () => {
     if (!targetCharacterId || !sourceAnimationId) {
       addLog("error", "Missing target or source");
       return;
     }
-
     if (!sourceAsset?.clips || sourceAsset.clips.length === 0) {
       addLog("error", "Source has no animation clips.");
       return;
     }
-
     if (!targetAsset?.skeleton || !sourceAsset?.skeleton) {
       addLog("error", "Skeletons required for retargeting.");
       return;
@@ -123,12 +152,16 @@ export const RetargetPanel: React.FC = () => {
       loadingSubMessage: `Mode: ${retargetSettings.mode.toUpperCase()} | Preparing data...`,
     });
     setWorkerStatus("ACTIVE");
-
     addLog(
       "info",
-      `Starting retarget worker [MODE: ${retargetSettings.mode.toUpperCase()}]...`,
+      `Starting retarget [MODE: ${retargetSettings.mode.toUpperCase()}]...`,
     );
 
+    // Capture bind poses
+    const srcSnapshot = snapshotBindPose(sourceAsset.skeleton);
+    const tgtSnapshot = snapshotBindPose(targetAsset.skeleton);
+
+    // Prepare animation track data
     const clip = sourceAsset.clips[0];
     const tracks = clip.tracks.map((t) => ({
       name: t.name,
@@ -137,17 +170,6 @@ export const RetargetPanel: React.FC = () => {
       type: t.name.endsWith(".position") ? "vector" : "quaternion",
     }));
 
-    // Snapshot bind pose for both skeletons (saves/restores animated state)
-    const srcSnapshot = snapshotBindPose(sourceAsset.skeleton);
-    const tgtSnapshot = snapshotBindPose(targetAsset.skeleton);
-
-    const sourceDef = srcSnapshot.def;
-    const targetDef = tgtSnapshot.def;
-    const targetChains = findIKChains(targetAsset.skeleton);
-
-    const sourceRest = srcSnapshot.restMap;
-    const targetRest = tgtSnapshot.restMap;
-
     setLoading({
       isLoading: true,
       loadingMessage: "BAKING ANIMATION",
@@ -155,13 +177,13 @@ export const RetargetPanel: React.FC = () => {
       loadingProgress: 25,
     });
 
-    // Use Vite-bundled worker instead of Blob URL
+    // Create & run worker
     const worker = createRetargetWorker();
 
     const timeout = setTimeout(() => {
       addLog(
         "error",
-        "Retargeting timed out after 60 seconds. Worker may have crashed.",
+        "Retargeting timed out after 60s. Worker may have crashed.",
       );
       clearLoading();
       setWorkerStatus("ERROR");
@@ -234,21 +256,19 @@ export const RetargetPanel: React.FC = () => {
       type: "RETARGET",
       sourceTracks: tracks,
       mapping: boneMapping,
-      sourceRestRotations: sourceRest,
-      targetRestRotations: targetRest,
+      sourceRestRotations: srcSnapshot.restMap,
+      targetRestRotations: tgtSnapshot.restMap,
       mode: retargetSettings.mode,
-      sourceDef,
-      targetDef,
-      targetChains,
+      sourceDef: srcSnapshot.def,
+      targetDef: tgtSnapshot.def,
+      targetChains: findIKChains(targetAsset.skeleton),
       fps: retargetSettings.fps,
       duration: clip.duration,
-      // Pass transformation scales
-      sourceScale: sourceAsset.object ? sourceAsset.object.scale.y : 1,
-      targetScale: targetAsset.object ? targetAsset.object.scale.y : 1,
     });
   };
 
-  // --- GLB Export Handler ---
+  // ── GLB Export ───────────────────────────────────────────────────────────
+
   const handleExport = async () => {
     if (!targetAsset?.object) {
       addLog("error", "No target object to export");
@@ -296,6 +316,8 @@ export const RetargetPanel: React.FC = () => {
       );
     }
   };
+
+  // ── Render ───────────────────────────────────────────────────────────────
 
   return (
     <div className="space-y-4">
@@ -360,7 +382,6 @@ export const RetargetPanel: React.FC = () => {
         BAKE ANIMATION
       </Button>
 
-      {/* Export Button */}
       <Button
         onClick={handleExport}
         className="w-full py-3 mt-2"
@@ -371,7 +392,6 @@ export const RetargetPanel: React.FC = () => {
         EXPORT GLB {activeClip ? "(WITH ANIM)" : ""}
       </Button>
 
-      {/* Export Status */}
       {activeClip && (
         <div className="text-[10px] text-gray-500 text-center font-mono">
           Animation loaded: {activeClip.duration.toFixed(2)}s •{" "}
